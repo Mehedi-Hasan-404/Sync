@@ -18,7 +18,7 @@ jobs:
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
 
       - name: Setup Android SDK
@@ -29,7 +29,7 @@ jobs:
 
       - name: Install Android build tools
         run: |
-          sdkmanager "build-tools;34.0.0" "platforms;android-34" "ndk;25.2.9519653"
+          sdkmanager "build-tools;36.0.0" "platforms;android-36" "ndk;25.2.9519653"
 
       - name: Create Java Gecko Browser project structure
         run: |
@@ -44,7 +44,7 @@ jobs:
                   mavenCentral()
               }
               dependencies {
-                  classpath 'com.android.tools.build:gradle:8.2.2'
+                  classpath 'com.android.tools.build:gradle:8.9.1'
               }
           }
 
@@ -88,12 +88,12 @@ jobs:
 
           android {
               namespace 'com.personal.javageckobrowser'
-              compileSdk 34
+              compileSdk 36
 
               defaultConfig {
                   applicationId 'com.personal.javageckobrowser'
                   minSdk 21
-                  targetSdk 34
+                  targetSdk 36
                   versionCode 1
                   versionName '1.0'
               }
