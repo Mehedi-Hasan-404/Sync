@@ -28,7 +28,7 @@ jobs:
             SDKMANAGER="${ANDROID_HOME}/cmdline-tools/$(ls ${ANDROID_HOME}/cmdline-tools | sort -V | tail -1)/bin/sdkmanager"
           fi
           yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" "build-tools;36.0.0" "platforms;android-36" "ndk;27.2.12479018" "cmake;3.22.1"
+          "$SDKMANAGER" "build-tools;35.0.0" "platforms;android-35" "ndk;27.2.12479018" "cmake;3.22.1"
 
       - name: Create Kotlin Gecko Browser project structure
         run: |
@@ -37,30 +37,9 @@ jobs:
 
           # Root build.gradle.kts
           cat > build.gradle.kts << 'GRADLE'
-          buildscript {
-              repositories {
-                  google()
-                  mavenCentral()
-              }
-              dependencies {
-                  classpath("com.android.tools.build:gradle:8.9.1")
-                  classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:2.0.21")
-              }
-          }
-
-          allprojects {
-              repositories {
-                  google()
-                  mavenCentral()
-                  maven { url = uri("https://maven.mozilla.org/maven2") }
-              }
-              configurations.all {
-                  resolutionStrategy {
-                      force("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
-                      force("org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21")
-                      force("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21")
-                  }
-              }
+          plugins {
+              id("com.android.application") version "8.7.3" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.20" apply false
           }
 
           tasks.register("clean", Delete::class) {
@@ -70,6 +49,21 @@ jobs:
 
           # settings.gradle.kts
           cat > settings.gradle.kts << 'SETTINGS'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url = uri("https://maven.mozilla.org/maven2") }
+              }
+          }
           rootProject.name = "KotlinGeckoBrowser"
           include(":app")
           SETTINGS
@@ -105,17 +99,17 @@ jobs:
           cat > app/build.gradle.kts << 'APPGRADLE'
           plugins {
               id("com.android.application")
-              id("kotlin-android")
+              id("org.jetbrains.kotlin.android")
           }
 
           android {
               namespace = "com.personal.geckobrowser"
-              compileSdk = 36
+              compileSdk = 35
 
               defaultConfig {
                   applicationId = "com.personal.geckobrowser"
                   minSdk = 26
-                  targetSdk = 36
+                  targetSdk = 35
                   versionCode = 1
                   versionName = "1.0"
                   ndk {
@@ -170,7 +164,7 @@ jobs:
           }
 
           dependencies {
-              implementation("org.mozilla.geckoview:geckoview:145.0.20251124145406")
+              implementation("org.mozilla.geckoview:geckoview-android:128.3.0")
               implementation("androidx.core:core-ktx:1.12.0")
               implementation("androidx.appcompat:appcompat:1.6.1")
               implementation("com.google.android.material:material:1.11.0")
@@ -242,7 +236,11 @@ jobs:
           import org.mozilla.geckoview.*
           import org.mozilla.geckoview.GeckoSession.ProgressDelegate
           class MainActivity : AppCompatActivity() {
-              companion object { var appRuntime: GeckoRuntime? = null }
+              companion object {
+                  var appRuntime: GeckoRuntime? = null
+                  val GECKO_UA get() = "Mozilla/5.0 (Android ${android.os.Build.VERSION.RELEASE}" +
+                      "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0"
+              }
 
               private lateinit var runtime: GeckoRuntime
               private lateinit var geckoView: GeckoView
@@ -261,12 +259,7 @@ jobs:
                   setContentView(R.layout.activity_main)
 
                   if (appRuntime == null) {
-                      val runtimeSettings = GeckoRuntimeSettings.Builder()
-                          .userAgent(
-                              "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
-                              "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0")
-                          .build()
-                      appRuntime = GeckoRuntime.create(this, runtimeSettings)
+                      appRuntime = GeckoRuntime.create(this)
                   }
                   runtime = appRuntime!!
 
@@ -372,6 +365,7 @@ jobs:
 
               private fun openNewTab(url: String) {
                   val session = GeckoSession()
+                  session.settings.userAgentOverride = GECKO_UA
                   session.progressDelegate = object : ProgressDelegate {
                       override fun onPageStart(session: GeckoSession, url: String) {
                           runOnUiThread {
@@ -1357,14 +1351,14 @@ jobs:
           PROGUARD
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.13'
+          gradle-version: '8.11.1'
 
       - name: Generate Gradle wrapper
         working-directory: KotlinGeckoBrowser
         run: |
-          gradle wrapper --gradle-version=8.13
+          gradle wrapper --gradle-version=8.11.1
           chmod +x gradlew
 
       - name: Build Kotlin Gecko Browser Debug APK
