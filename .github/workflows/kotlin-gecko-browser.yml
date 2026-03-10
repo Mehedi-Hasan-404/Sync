@@ -232,11 +232,7 @@ jobs:
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_main)
 
-                  val runtimeSettings = GeckoRuntimeSettings.Builder()
-                      .remoteDebuggingEnabled(false)
-                      .consoleOutput(false)
-                      .build()
-                  runtime = GeckoRuntime.getDefault(this, runtimeSettings)
+                  runtime = GeckoRuntime.getDefault(this)
 
                   geckoView = findViewById(R.id.gecko_view)
                   urlBar = findViewById(R.id.url_bar)
@@ -287,11 +283,10 @@ jobs:
 
               private fun openNewTab(url: String) {
                   val session = GeckoSession()
-                  session.settings.usePrivateMode = false
 
                   session.navigationDelegate = object : NavigationDelegate {
                       override fun onLocationChange(
-                          session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>
+                          session: GeckoSession, url: String?
                       ) {
                           runOnUiThread { urlBar.setText(url) }
                       }
