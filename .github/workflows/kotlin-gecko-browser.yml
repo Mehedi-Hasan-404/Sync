@@ -753,12 +753,12 @@ jobs:
       - name: Setup Gradle wrapper for Kotlin project
         run: |
           cd KotlinGeckoBrowser
-          gradle wrapper --gradle-version=8.4 || true
+          gradle wrapper --gradle-version=8.13 || true
           mkdir -p gradle/wrapper
           cat > gradle/wrapper/gradle-wrapper.properties << 'WRAPPERPROPS'
           distributionBase=GRADLE_USER_HOME
           distributionPath=wrapper/dists
-          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.13-bin.zip
           zipStoreBase=GRADLE_USER_HOME
           zipStorePath=wrapper/dists
           WRAPPERPROPS
@@ -766,7 +766,7 @@ jobs:
       - name: Install Gradle
         uses: gradle/gradle-build-action@v3
         with:
-          gradle-version: '8.4'
+          gradle-version: '8.13'
 
       - name: Build Kotlin Gecko Browser Debug APK
         working-directory: KotlinGeckoBrowser
