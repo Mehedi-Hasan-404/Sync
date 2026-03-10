@@ -65,7 +65,7 @@ jobs:
           }
 
           tasks.register("clean", Delete::class) {
-              delete(rootProject.buildDir)
+              delete(layout.buildDirectory)
           }
           GRADLE
 
@@ -207,8 +207,6 @@ jobs:
           import android.content.Intent
           import android.net.Uri
           import android.os.Bundle
-          import android.view.ContextMenu
-          import android.view.MenuItem
           import android.view.View
           import android.view.inputmethod.EditorInfo
           import android.widget.*
@@ -234,8 +232,11 @@ jobs:
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_main)
 
-                  runtime = GeckoRuntime.getDefault(this)
-                  setupDRM()
+                  val runtimeSettings = GeckoRuntimeSettings.Builder()
+                      .remoteDebuggingEnabled(false)
+                      .consoleOutput(false)
+                      .build()
+                  runtime = GeckoRuntime.create(this, runtimeSettings)
 
                   geckoView = findViewById(R.id.gecko_view)
                   urlBar = findViewById(R.id.url_bar)
@@ -245,14 +246,6 @@ jobs:
                   setupUrlBar()
                   setupButtons()
                   openNewTab("https://www.google.com")
-              }
-
-              private fun setupDRM() {
-                  val settings = GeckoRuntimeSettings.Builder()
-                      .remoteDebuggingEnabled(false)
-                      .consoleOutput(false)
-                      .build()
-                  // DRM (Widevine) is enabled by default in GeckoView — no restrictions
               }
 
               private fun setupTabs() {
@@ -783,7 +776,7 @@ jobs:
           WRAPPERPROPS
 
       - name: Install Gradle
-        uses: gradle/gradle-build-action@v3
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.13'
 
