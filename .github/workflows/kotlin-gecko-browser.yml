@@ -216,7 +216,7 @@ jobs:
           import androidx.recyclerview.widget.RecyclerView
           import com.google.android.material.floatingactionbutton.FloatingActionButton
           import org.mozilla.geckoview.*
-          import org.mozilla.geckoview.GeckoSession.NavigationDelegate
+          import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 
           class MainActivity : AppCompatActivity() {
 
@@ -284,9 +284,9 @@ jobs:
               private fun openNewTab(url: String) {
                   val session = GeckoSession()
 
-                  session.navigationDelegate = object : NavigationDelegate {
-                      override fun onLocationChange(
-                          session: GeckoSession, url: String?
+                  session.progressDelegate = object : ProgressDelegate {
+                      override fun onPageStart(
+                          session: GeckoSession, url: String
                       ) {
                           runOnUiThread { urlBar.setText(url) }
                       }
