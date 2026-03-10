@@ -236,7 +236,7 @@ jobs:
                       .remoteDebuggingEnabled(false)
                       .consoleOutput(false)
                       .build()
-                  runtime = GeckoRuntime.create(this, runtimeSettings)
+                  runtime = GeckoRuntime.getDefault(this, runtimeSettings)
 
                   geckoView = findViewById(R.id.gecko_view)
                   urlBar = findViewById(R.id.url_bar)
@@ -471,6 +471,7 @@ jobs:
               }
 
               private fun installExtensionFromUri(uri: Uri) {
+                  Thread {
                   try {
                       val fileName = getFileName(uri) ?: "extension_${System.currentTimeMillis()}"
                       val extDir = File(filesDir, "extensions/${fileName.removeSuffix(".zip").removeSuffix(".xpi")}")
@@ -508,8 +509,11 @@ jobs:
                               }
                           })
                   } catch (e: Exception) {
-                      Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                      runOnUiThread {
+                          Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                      }
                   }
+                  }.start()
               }
 
               private fun showUrlInstallDialog() {
