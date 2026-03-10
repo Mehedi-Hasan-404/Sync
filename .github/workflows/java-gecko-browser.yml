@@ -201,7 +201,6 @@ jobs:
           import androidx.recyclerview.widget.RecyclerView;
 
           import com.google.android.material.floatingactionbutton.FloatingActionButton;
-          import com.google.android.material.textfield.TextInputEditText;
 
           import org.mozilla.geckoview.GeckoRuntime;
           import org.mozilla.geckoview.GeckoSession;
@@ -824,7 +823,7 @@ jobs:
           WRAPPERPROPS
 
       - name: Install Gradle
-        uses: gradle/gradle-build-action@v3
+        uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: '8.13'
 
