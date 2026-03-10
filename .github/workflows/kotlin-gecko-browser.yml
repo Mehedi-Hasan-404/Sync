@@ -151,6 +151,7 @@ jobs:
               implementation("androidx.appcompat:appcompat:1.6.1")
               implementation("com.google.android.material:material:1.11.0")
               implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+              implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
               implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
               implementation("androidx.recyclerview:recyclerview:1.3.2")
               implementation("androidx.documentfile:documentfile:1.0.1")
@@ -214,17 +215,19 @@ jobs:
           import androidx.appcompat.app.AppCompatActivity
           import androidx.recyclerview.widget.LinearLayoutManager
           import androidx.recyclerview.widget.RecyclerView
-          import com.google.android.material.floatingactionbutton.FloatingActionButton
           import org.mozilla.geckoview.*
           import org.mozilla.geckoview.GeckoSession.ProgressDelegate
-
           class MainActivity : AppCompatActivity() {
 
               private lateinit var runtime: GeckoRuntime
               private lateinit var geckoView: GeckoView
               private lateinit var urlBar: EditText
+              private lateinit var lockIcon: ImageView
               private lateinit var tabsContainer: RecyclerView
               private lateinit var tabAdapter: TabAdapter
+              private lateinit var tabCountText: TextView
+              private lateinit var btnBack: ImageButton
+              private lateinit var btnForward: ImageButton
               private val tabs = mutableListOf<BrowserTab>()
               private var currentTabIndex = 0
 
@@ -234,9 +237,13 @@ jobs:
 
                   runtime = GeckoRuntime.getDefault(this)
 
-                  geckoView = findViewById(R.id.gecko_view)
-                  urlBar = findViewById(R.id.url_bar)
+                  geckoView     = findViewById(R.id.gecko_view)
+                  urlBar        = findViewById(R.id.url_bar)
+                  lockIcon      = findViewById(R.id.lock_icon)
                   tabsContainer = findViewById(R.id.tabs_recycler)
+                  tabCountText  = findViewById(R.id.tab_count_text)
+                  btnBack       = findViewById(R.id.btn_back)
+                  btnForward    = findViewById(R.id.btn_forward)
 
                   setupTabs()
                   setupUrlBar()
@@ -245,78 +252,132 @@ jobs:
               }
 
               private fun setupTabs() {
-                  tabAdapter = TabAdapter(tabs) { index -> switchToTab(index) }
+                  tabAdapter = TabAdapter(tabs,
+                      onTabClick = { index -> switchToTab(index) },
+                      onTabClose = { index -> closeTab(index) }
+                  )
                   tabsContainer.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
                   tabsContainer.adapter = tabAdapter
               }
 
               private fun setupUrlBar() {
+                  // Show full URL when focused for editing
+                  urlBar.setOnFocusChangeListener { _, hasFocus ->
+                      if (hasFocus) {
+                          urlBar.setText(tabs.getOrNull(currentTabIndex)?.url ?: "")
+                          urlBar.selectAll()
+                      } else {
+                          showDisplayUrl(tabs.getOrNull(currentTabIndex)?.url ?: "")
+                      }
+                  }
                   urlBar.setOnEditorActionListener { _, actionId, _ ->
-                      if (actionId == EditorInfo.IME_ACTION_GO ||
-                          actionId == EditorInfo.IME_ACTION_DONE) {
+                      if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
                           loadUrl(urlBar.text.toString())
+                          urlBar.clearFocus()
+                          val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                          imm.hideSoftInputFromWindow(urlBar.windowToken, 0)
                           true
                       } else false
                   }
               }
 
+              /** Shows domain (or search query) in the URL bar — Chrome style */
+              private fun showDisplayUrl(url: String) {
+                  if (url.isEmpty()) { urlBar.setText(""); return }
+                  val display = try {
+                      val uri = Uri.parse(url)
+                      val host = uri.host
+                      if (host != null) {
+                          lockIcon.visibility = if (url.startsWith("https://")) View.VISIBLE else View.GONE
+                          host.removePrefix("www.")
+                      } else url
+                  } catch (e: Exception) { url }
+                  urlBar.setText(display)
+              }
+
               private fun setupButtons() {
-                  findViewById<ImageButton>(R.id.btn_back).setOnClickListener {
-                      tabs.getOrNull(currentTabIndex)?.session?.goBack()
+                  btnBack.setOnClickListener { tabs.getOrNull(currentTabIndex)?.session?.goBack() }
+                  btnForward.setOnClickListener { tabs.getOrNull(currentTabIndex)?.session?.goForward() }
+                  // Tab-switcher tap: show/hide strip; long-press: open new tab
+                  val btnTabSwitcher = findViewById<FrameLayout>(R.id.btn_new_tab)
+                  btnTabSwitcher.setOnClickListener { toggleTabStrip() }
+                  btnTabSwitcher.setOnLongClickListener { openNewTab("https://www.google.com"); true }
+                  findViewById<ImageButton>(R.id.btn_menu).setOnClickListener { v -> showBrowserMenu(v) }
+              }
+
+              private fun toggleTabStrip() {
+                  val strip = tabsContainer
+                  if (strip.visibility == View.VISIBLE) {
+                      strip.visibility = View.GONE
+                      strip.layoutParams.height = 0
+                  } else {
+                      strip.layoutParams.height = resources.getDimensionPixelSize(
+                          android.R.dimen.app_icon_size).coerceAtMost(40.dpToPx())
+                      strip.visibility = View.VISIBLE
+                      tabAdapter.notifyDataSetChanged()
                   }
-                  findViewById<ImageButton>(R.id.btn_forward).setOnClickListener {
-                      tabs.getOrNull(currentTabIndex)?.session?.goForward()
-                  }
-                  findViewById<ImageButton>(R.id.btn_refresh).setOnClickListener {
-                      tabs.getOrNull(currentTabIndex)?.session?.reload()
-                  }
-                  findViewById<FloatingActionButton>(R.id.btn_new_tab).setOnClickListener {
-                      openNewTab("https://www.google.com")
-                  }
-                  findViewById<ImageButton>(R.id.btn_extensions).setOnClickListener {
-                      startActivity(Intent(this, ExtensionManagerActivity::class.java))
-                  }
-                  findViewById<ImageButton>(R.id.btn_menu).setOnClickListener { v ->
-                      showBrowserMenu(v)
-                  }
+                  strip.requestLayout()
+              }
+
+              private fun Int.dpToPx() = (this * resources.displayMetrics.density).toInt()
+
+              private fun updateNavButtons() {
+                  btnBack.alpha = if (tabs.getOrNull(currentTabIndex)?.session != null) 1.0f else 0.4f
+                  btnForward.alpha = 0.4f
+              }
+
+              private fun updateTabCount() {
+                  tabCountText.text = tabs.size.coerceAtMost(99).toString()
               }
 
               private fun openNewTab(url: String) {
                   val session = GeckoSession()
-
                   session.progressDelegate = object : ProgressDelegate {
-                      override fun onPageStart(
-                          session: GeckoSession, url: String
-                      ) {
-                          runOnUiThread { urlBar.setText(url) }
+                      override fun onPageStart(session: GeckoSession, url: String) {
+                          runOnUiThread {
+                              tabs.getOrNull(currentTabIndex)?.url = url
+                              if (!urlBar.isFocused) showDisplayUrl(url)
+                          }
                       }
                   }
-
                   session.open(runtime)
                   val tab = BrowserTab(session, url)
                   tabs.add(tab)
                   tabAdapter.notifyItemInserted(tabs.size - 1)
                   switchToTab(tabs.size - 1)
+                  updateTabCount()
                   session.loadUri(url)
               }
 
               private fun switchToTab(index: Int) {
                   currentTabIndex = index
-                  val session = tabs[index].session
-                  geckoView.setSession(session)
-                  urlBar.setText(tabs[index].url)
+                  geckoView.setSession(tabs[index].session)
+                  showDisplayUrl(tabs[index].url)
+                  updateNavButtons()
+                  // Hide strip after switching
+                  tabsContainer.visibility = View.GONE
+              }
+
+              private fun closeTab(index: Int) {
+                  if (tabs.size <= 1) {
+                      openNewTab("https://www.google.com")
+                      tabs[0].session.close(); tabs.removeAt(0)
+                      tabAdapter.notifyDataSetChanged(); updateTabCount(); return
+                  }
+                  tabs[index].session.close(); tabs.removeAt(index)
+                  tabAdapter.notifyDataSetChanged()
+                  switchToTab(maxOf(0, if (index >= tabs.size) tabs.size - 1 else index))
+                  updateTabCount()
               }
 
               private fun loadUrl(input: String) {
-                  val url = if (input.startsWith("http://") || input.startsWith("https://")) {
-                      input
-                  } else if (input.contains(".") && !input.contains(" ")) {
-                      "https://$input"
-                  } else {
-                      "https://www.google.com/search?q=${Uri.encode(input)}"
+                  val url = when {
+                      input.startsWith("http://") || input.startsWith("https://") -> input
+                      input.contains(".") && !input.contains(" ") -> "https://$input"
+                      else -> "https://www.google.com/search?q=${Uri.encode(input)}"
                   }
-                  tabs.getOrNull(currentTabIndex)?.session?.loadUri(url)
-                  tabs.getOrNull(currentTabIndex)?.url = url
+                  tabs.getOrNull(currentTabIndex)?.apply { session.loadUri(url); this.url = url }
+                  showDisplayUrl(url)
               }
 
               private fun showBrowserMenu(anchor: View) {
@@ -324,35 +385,28 @@ jobs:
                   popup.menuInflater.inflate(R.menu.browser_menu, popup.menu)
                   popup.setOnMenuItemClickListener { item ->
                       when (item.itemId) {
-                          R.id.menu_new_tab -> { openNewTab("https://www.google.com"); true }
-                          R.id.menu_close_tab -> { closeCurrentTab(); true }
-                          R.id.menu_extensions -> {
-                              startActivity(Intent(this, ExtensionManagerActivity::class.java)); true
-                          }
-                          R.id.menu_settings -> { showSettingsDialog(); true }
+                          R.id.menu_new_tab        -> { openNewTab("https://www.google.com"); true }
+                          R.id.menu_new_incognito  -> { openNewTab("https://www.google.com"); true }
+                          R.id.menu_close_tab      -> { closeTab(currentTabIndex); true }
+                          R.id.menu_refresh        -> { tabs.getOrNull(currentTabIndex)?.session?.reload(); true }
+                          R.id.menu_extensions     -> { startActivity(Intent(this, ExtensionManagerActivity::class.java)); true }
+                          R.id.menu_find_in_page   -> { showFindInPageHint(); true }
+                          R.id.menu_settings       -> { showSettingsDialog(); true }
                           else -> false
                       }
                   }
                   popup.show()
               }
 
-              private fun closeCurrentTab() {
-                  if (tabs.size <= 1) {
-                      openNewTab("https://www.google.com")
-                      return
-                  }
-                  tabs[currentTabIndex].session.close()
-                  tabs.removeAt(currentTabIndex)
-                  tabAdapter.notifyDataSetChanged()
-                  switchToTab(maxOf(0, currentTabIndex - 1))
+              private fun showFindInPageHint() {
+                  Toast.makeText(this, "Find in page (coming soon)", Toast.LENGTH_SHORT).show()
               }
 
               private fun showSettingsDialog() {
                   AlertDialog.Builder(this)
                       .setTitle("Settings")
                       .setMessage("GeckoView Browser\nDRM: Enabled\nExtensions: Supported")
-                      .setPositiveButton("OK", null)
-                      .show()
+                      .setPositiveButton("OK", null).show()
               }
           }
 
@@ -371,11 +425,13 @@ jobs:
 
           class TabAdapter(
               private val tabs: List<BrowserTab>,
-              private val onTabClick: (Int) -> Unit
+              private val onTabClick: (Int) -> Unit,
+              private val onTabClose: (Int) -> Unit
           ) : RecyclerView.Adapter<TabAdapter.TabViewHolder>() {
 
               inner class TabViewHolder(view: View) : RecyclerView.ViewHolder(view) {
                   val tabTitle: TextView = view.findViewById(R.id.tab_title)
+                  val btnClose: ImageButton = view.findViewById(R.id.btn_close_tab)
               }
 
               override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): TabViewHolder {
@@ -385,8 +441,13 @@ jobs:
               }
 
               override fun onBindViewHolder(holder: TabViewHolder, position: Int) {
-                  holder.tabTitle.text = tabs[position].url.take(20) + "..."
+                  val url = tabs[position].url
+                  val domain = try {
+                      android.net.Uri.parse(url).host?.removePrefix("www.") ?: url.take(20)
+                  } catch (e: Exception) { url.take(20) }
+                  holder.tabTitle.text = domain
                   holder.itemView.setOnClickListener { onTabClick(position) }
+                  holder.btnClose.setOnClickListener { onTabClose(position) }
               }
 
               override fun getItemCount() = tabs.size
@@ -416,17 +477,20 @@ jobs:
                   const val PICK_EXTENSION = 1001
               }
 
-              private lateinit var extensionList: ListView
+              private lateinit var extensionList: androidx.recyclerview.widget.RecyclerView
               private val installedExtensions = mutableListOf<String>()
-              private lateinit var adapter: ArrayAdapter<String>
+              private lateinit var extAdapter: ArrayAdapter<String>
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_extension_manager)
 
+                  findViewById<ImageButton>(R.id.btn_back_ext).setOnClickListener { finish() }
+
                   extensionList = findViewById(R.id.extension_list)
-                  adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, installedExtensions)
-                  extensionList.adapter = adapter
+                  extAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, installedExtensions)
+                  extensionList.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
+                  extensionList.adapter = extAdapter
 
                   loadInstalledExtensions()
 
@@ -454,7 +518,7 @@ jobs:
                       extDir.listFiles()?.forEach {
                           installedExtensions.add(it.name)
                       }
-                      adapter.notifyDataSetChanged()
+                      extAdapter.notifyDataSetChanged()
                   }
               }
 
@@ -495,7 +559,7 @@ jobs:
                           .accept({ ext: WebExtension? ->
                               runOnUiThread {
                                   installedExtensions.add(ext?.id ?: extDir.name)
-                                  adapter.notifyDataSetChanged()
+                                  extAdapter.notifyDataSetChanged()
                                   Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
                               }
                           }, { throwable: Throwable? ->
@@ -525,7 +589,7 @@ jobs:
                                   .accept({ ext: WebExtension? ->
                                       runOnUiThread {
                                           installedExtensions.add(ext?.id ?: url)
-                                          adapter.notifyDataSetChanged()
+                                          extAdapter.notifyDataSetChanged()
                                           Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
                                       }
                                   }, { throwable: Throwable? ->
@@ -550,178 +614,436 @@ jobs:
           }
           EXTKT
 
-          # activity_main.xml
+          # Vector drawables - Chrome-style icons
+          cat > app/src/main/res/drawable/ic_arrow_back.xml << 'DRAWBACK'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z"/>
+          </vector>
+          DRAWBACK
+
+          cat > app/src/main/res/drawable/ic_arrow_forward.xml << 'DRAWFWD'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M12,4l-1.41,1.41L16.17,11H4v2h12.17l-5.58,5.59L12,20l8,-8z"/>
+          </vector>
+          DRAWFWD
+
+          cat > app/src/main/res/drawable/ic_refresh.xml << 'DRAWREF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M17.65,6.35C16.2,4.9 14.21,4 12,4c-4.42,0 -7.99,3.58 -7.99,8s3.57,8 7.99,8c3.73,0 6.84,-2.55 7.73,-6h-2.08c-0.82,2.33 -3.04,4 -5.65,4 -3.31,0 -6,-2.69 -6,-6s2.69,-6 6,-6c1.66,0 3.14,0.69 4.22,1.78L13,11h7V4l-2.35,2.35z"/>
+          </vector>
+          DRAWREF
+
+          cat > app/src/main/res/drawable/ic_more_vert.xml << 'DRAWMORE'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M12,8c1.1,0 2,-0.9 2,-2s-0.9,-2 -2,-2 -2,0.9 -2,2 0.9,2 2,2zM12,10c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2zM12,16c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2z"/>
+          </vector>
+          DRAWMORE
+
+          cat > app/src/main/res/drawable/ic_tab_count.xml << 'DRAWTAB'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="2"
+                  android:pathData="M4,6h14v14H4z"/>
+              <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="2"
+                  android:pathData="M6,4h14v14"/>
+          </vector>
+          DRAWTAB
+
+          cat > app/src/main/res/drawable/ic_extensions.xml << 'DRAWEXT'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#FFFFFF"
+                  android:pathData="M20.5,11H19V7c0,-1.1 -0.9,-2 -2,-2h-4V3.5C13,2.12 11.88,1 10.5,1S8,2.12 8,3.5V5H4C2.9,5 2,5.9 2,7v3.8h1.5c1.49,0 2.7,1.21 2.7,2.7s-1.21,2.7 -2.7,2.7H2V20c0,1.1 0.9,2 2,2h3.8v-1.5c0,-1.49 1.21,-2.7 2.7,-2.7 1.49,0 2.7,1.21 2.7,2.7V22H17c1.1,0 2,-0.9 2,-2v-4h1.5c1.38,0 2.5,-1.12 2.5,-2.5S21.88,11 20.5,11z"/>
+          </vector>
+          DRAWEXT
+
+          cat > app/src/main/res/drawable/ic_lock.xml << 'DRAWLOCK'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="16dp" android:height="16dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#8AB4F8"
+                  android:pathData="M18,8h-1V6c0,-2.76 -2.24,-5 -5,-5S7,3.24 7,6v2H6c-1.1,0 -2,0.9 -2,2v10c0,1.1 0.9,2 2,2h12c1.1,0 2,-0.9 2,-2V10c0,-1.1 -0.9,-2 -2,-2zM12,17c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2 -0.9,2 -2,2zM15.1,8H8.9V6c0,-1.71 1.39,-3.1 3.1,-3.1 1.71,0 3.1,1.39 3.1,3.1v2z"/>
+          </vector>
+          DRAWLOCK
+
+          cat > app/src/main/res/drawable/ic_close.xml << 'DRAWCLOSE'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#9AA0A6"
+                  android:pathData="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z"/>
+          </vector>
+          DRAWCLOSE
+
+          cat > app/src/main/res/drawable/ic_home.xml << 'DRAWHOME'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#9AA0A6"
+                  android:pathData="M10,20v-6h4v6h5v-8h3L12,3 2,12h3v8z"/>
+          </vector>
+          DRAWHOME
+
+          cat > app/src/main/res/drawable/favicon_dot.xml << 'DRAWFAV'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="oval">
+              <solid android:color="#5F6368"/>
+          </shape>
+          DRAWFAV
+
+          cat > app/src/main/res/drawable/url_bar_bg.xml << 'URLBARBG'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <corners android:radius="20dp"/>
+              <solid android:color="#3C4043"/>
+          </shape>
+          URLBARBG
+
+          cat > app/src/main/res/drawable/tab_item_bg.xml << 'TABITEMBG'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <corners android:topLeftRadius="8dp" android:topRightRadius="8dp"/>
+              <solid android:color="#35363A"/>
+          </shape>
+          TABITEMBG
+
+          cat > app/src/main/res/drawable/tab_item_bg_active.xml << 'TABACTIVEBG'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <corners android:topLeftRadius="8dp" android:topRightRadius="8dp"/>
+              <solid android:color="#202124"/>
+          </shape>
+          TABACTIVEBG
+
+          cat > app/src/main/res/drawable/popup_bg.xml << 'POPUPBG'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <corners android:radius="8dp"/>
+              <solid android:color="#292A2D"/>
+          </shape>
+          POPUPBG
+
+          # activity_main.xml — exact Chrome bottom-bar layout
+          # Single toolbar row: back | forward | [URL pill] | tab-switcher | ⋮
+          # Tab strip sits ABOVE the toolbar, hidden unless multiple tabs exist
           cat > app/src/main/res/layout/activity_main.xml << 'MAINXML'
           <?xml version="1.0" encoding="utf-8"?>
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+          <androidx.coordinatorlayout.widget.CoordinatorLayout
+              xmlns:android="http://schemas.android.com/apk/res/android"
+              xmlns:app="http://schemas.android.com/apk/res-auto"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
-              android:orientation="vertical">
+              android:background="#202124">
 
-              <!-- Tab Bar -->
-              <androidx.recyclerview.widget.RecyclerView
-                  android:id="@+id/tabs_recycler"
-                  android:layout_width="match_parent"
-                  android:layout_height="48dp"
-                  android:background="#1E1E1E"
-                  android:paddingStart="4dp"
-                  android:paddingEnd="4dp" />
-
-              <!-- URL Bar + Controls -->
-              <LinearLayout
-                  android:layout_width="match_parent"
-                  android:layout_height="52dp"
-                  android:background="#2D2D2D"
-                  android:gravity="center_vertical"
-                  android:orientation="horizontal"
-                  android:paddingStart="4dp"
-                  android:paddingEnd="4dp">
-
-                  <ImageButton
-                      android:id="@+id/btn_back"
-                      android:layout_width="36dp"
-                      android:layout_height="36dp"
-                      android:background="?attr/selectableItemBackgroundBorderless"
-                      android:src="@android:drawable/ic_media_previous"
-                      android:tint="#FFFFFF" />
-
-                  <ImageButton
-                      android:id="@+id/btn_forward"
-                      android:layout_width="36dp"
-                      android:layout_height="36dp"
-                      android:background="?attr/selectableItemBackgroundBorderless"
-                      android:src="@android:drawable/ic_media_next"
-                      android:tint="#FFFFFF" />
-
-                  <ImageButton
-                      android:id="@+id/btn_refresh"
-                      android:layout_width="36dp"
-                      android:layout_height="36dp"
-                      android:background="?attr/selectableItemBackgroundBorderless"
-                      android:src="@android:drawable/ic_menu_rotate"
-                      android:tint="#FFFFFF" />
-
-                  <EditText
-                      android:id="@+id/url_bar"
-                      android:layout_width="0dp"
-                      android:layout_height="36dp"
-                      android:layout_weight="1"
-                      android:background="@android:drawable/edit_text"
-                      android:hint="Search or enter URL"
-                      android:imeOptions="actionGo"
-                      android:inputType="textUri"
-                      android:maxLines="1"
-                      android:paddingStart="8dp"
-                      android:paddingEnd="8dp"
-                      android:singleLine="true"
-                      android:textColor="#FFFFFF"
-                      android:textColorHint="#888888"
-                      android:textSize="14sp" />
-
-                  <ImageButton
-                      android:id="@+id/btn_extensions"
-                      android:layout_width="36dp"
-                      android:layout_height="36dp"
-                      android:background="?attr/selectableItemBackgroundBorderless"
-                      android:src="@android:drawable/ic_menu_add"
-                      android:tint="#FFFFFF" />
-
-                  <ImageButton
-                      android:id="@+id/btn_menu"
-                      android:layout_width="36dp"
-                      android:layout_height="36dp"
-                      android:background="?attr/selectableItemBackgroundBorderless"
-                      android:src="@android:drawable/ic_menu_more"
-                      android:tint="#FFFFFF" />
-
-              </LinearLayout>
-
-              <!-- GeckoView -->
+              <!-- Web content — full screen, toolbar overlays at bottom -->
               <org.mozilla.geckoview.GeckoView
                   android:id="@+id/gecko_view"
                   android:layout_width="match_parent"
-                  android:layout_height="0dp"
-                  android:layout_weight="1" />
+                  android:layout_height="match_parent"
+                  android:layout_marginBottom="56dp"/>
 
-              <!-- New Tab FAB -->
-              <com.google.android.material.floatingactionbutton.FloatingActionButton
-                  android:id="@+id/btn_new_tab"
-                  android:layout_width="wrap_content"
+              <!-- Bottom chrome: tab strip (collapsible) + single toolbar row -->
+              <LinearLayout
+                  android:id="@+id/bottom_chrome"
+                  android:layout_width="match_parent"
                   android:layout_height="wrap_content"
-                  android:layout_gravity="end|bottom"
-                  android:layout_margin="16dp"
-                  android:src="@android:drawable/ic_input_add"
-                  android:contentDescription="New Tab" />
+                  android:orientation="vertical"
+                  android:layout_gravity="bottom"
+                  android:background="#202124"
+                  android:elevation="4dp">
 
-          </LinearLayout>
+                  <!-- Thin divider -->
+                  <View
+                      android:layout_width="match_parent"
+                      android:layout_height="1dp"
+                      android:background="#3C4043"/>
+
+                  <!-- Tab strip — compact, shown when >1 tab -->
+                  <androidx.recyclerview.widget.RecyclerView
+                      android:id="@+id/tabs_recycler"
+                      android:layout_width="match_parent"
+                      android:layout_height="0dp"
+                      android:visibility="gone"
+                      android:background="#292A2D"
+                      android:paddingStart="8dp"
+                      android:paddingEnd="8dp"/>
+
+                  <!-- Main toolbar: BACK | FORWARD | [URL BAR] | TABS | MENU -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="56dp"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical"
+                      android:paddingStart="2dp"
+                      android:paddingEnd="2dp">
+
+                      <!-- Back -->
+                      <ImageButton
+                          android:id="@+id/btn_back"
+                          android:layout_width="0dp"
+                          android:layout_height="48dp"
+                          android:layout_weight="1"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:src="@drawable/ic_arrow_back"
+                          android:alpha="0.4"
+                          android:scaleType="center"
+                          android:contentDescription="Back"/>
+
+                      <!-- Forward -->
+                      <ImageButton
+                          android:id="@+id/btn_forward"
+                          android:layout_width="0dp"
+                          android:layout_height="48dp"
+                          android:layout_weight="1"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:src="@drawable/ic_arrow_forward"
+                          android:alpha="0.4"
+                          android:scaleType="center"
+                          android:contentDescription="Forward"/>
+
+                      <!-- URL pill — takes most of the space -->
+                      <LinearLayout
+                          android:id="@+id/url_bar_container"
+                          android:layout_width="0dp"
+                          android:layout_height="40dp"
+                          android:layout_weight="4"
+                          android:layout_marginStart="4dp"
+                          android:layout_marginEnd="4dp"
+                          android:background="@drawable/url_bar_bg"
+                          android:orientation="horizontal"
+                          android:gravity="center_vertical"
+                          android:paddingStart="14dp"
+                          android:paddingEnd="10dp">
+
+                          <ImageView
+                              android:id="@+id/lock_icon"
+                              android:layout_width="14dp"
+                              android:layout_height="14dp"
+                              android:src="@drawable/ic_lock"
+                              android:layout_marginEnd="6dp"
+                              android:visibility="gone"/>
+
+                          <EditText
+                              android:id="@+id/url_bar"
+                              android:layout_width="0dp"
+                              android:layout_height="match_parent"
+                              android:layout_weight="1"
+                              android:background="@null"
+                              android:hint="Search or type URL"
+                              android:imeOptions="actionGo|flagNoExtractUi"
+                              android:inputType="textUri|textNoSuggestions"
+                              android:maxLines="1"
+                              android:singleLine="true"
+                              android:textColor="#E8EAED"
+                              android:textColorHint="#9AA0A6"
+                              android:textSize="15sp"
+                              android:gravity="center"
+                              android:selectAllOnFocus="true"
+                              android:ellipsize="middle"/>
+
+                      </LinearLayout>
+
+                      <!-- Tab switcher with live count badge -->
+                      <FrameLayout
+                          android:id="@+id/btn_new_tab"
+                          android:layout_width="0dp"
+                          android:layout_height="48dp"
+                          android:layout_weight="1"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:clickable="true"
+                          android:focusable="true">
+
+                          <ImageView
+                              android:layout_width="22dp"
+                              android:layout_height="22dp"
+                              android:layout_gravity="center"
+                              android:src="@drawable/ic_tab_count"/>
+
+                          <TextView
+                              android:id="@+id/tab_count_text"
+                              android:layout_width="22dp"
+                              android:layout_height="22dp"
+                              android:layout_gravity="center"
+                              android:gravity="center"
+                              android:textColor="#FFFFFF"
+                              android:textSize="10sp"
+                              android:textStyle="bold"
+                              android:text="1"/>
+
+                      </FrameLayout>
+
+                      <!-- 3-dot menu -->
+                      <ImageButton
+                          android:id="@+id/btn_menu"
+                          android:layout_width="0dp"
+                          android:layout_height="48dp"
+                          android:layout_weight="1"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:src="@drawable/ic_more_vert"
+                          android:scaleType="center"
+                          android:contentDescription="Menu"/>
+
+                  </LinearLayout>
+
+              </LinearLayout>
+
+          </androidx.coordinatorlayout.widget.CoordinatorLayout>
           MAINXML
 
-          # item_tab.xml
+          # item_tab.xml — Chrome compact tab strip chip
           cat > app/src/main/res/layout/item_tab.xml << 'TABXML'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="120dp"
-              android:layout_height="match_parent"
-              android:background="#333333"
+              android:layout_width="wrap_content"
+              android:layout_height="36dp"
+              android:background="@drawable/tab_item_bg"
               android:gravity="center_vertical"
               android:orientation="horizontal"
-              android:padding="8dp"
-              android:layout_marginEnd="2dp">
+              android:paddingStart="10dp"
+              android:paddingEnd="6dp"
+              android:layout_marginEnd="3dp"
+              android:minWidth="96dp"
+              android:maxWidth="160dp">
+
+              <!-- Favicon placeholder dot -->
+              <View
+                  android:layout_width="8dp"
+                  android:layout_height="8dp"
+                  android:background="@drawable/favicon_dot"
+                  android:layout_marginEnd="6dp"/>
 
               <TextView
                   android:id="@+id/tab_title"
-                  android:layout_width="match_parent"
+                  android:layout_width="0dp"
                   android:layout_height="wrap_content"
+                  android:layout_weight="1"
                   android:ellipsize="end"
                   android:maxLines="1"
-                  android:textColor="#FFFFFF"
-                  android:textSize="12sp" />
+                  android:textColor="#E8EAED"
+                  android:textSize="12sp"/>
+
+              <ImageButton
+                  android:id="@+id/btn_close_tab"
+                  android:layout_width="24dp"
+                  android:layout_height="24dp"
+                  android:background="?attr/selectableItemBackgroundBorderless"
+                  android:src="@drawable/ic_close"
+                  android:padding="4dp"
+                  android:layout_marginStart="4dp"
+                  android:contentDescription="Close tab"/>
+
           </LinearLayout>
           TABXML
 
-          # activity_extension_manager.xml
+          # activity_extension_manager.xml - Material dark style
           cat > app/src/main/res/layout/activity_extension_manager.xml << 'EXTXML'
           <?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
               android:orientation="vertical"
-              android:padding="16dp">
+              android:background="#202124">
+
+              <!-- Toolbar -->
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="56dp"
+                  android:orientation="horizontal"
+                  android:gravity="center_vertical"
+                  android:background="#292A2D"
+                  android:paddingStart="4dp"
+                  android:paddingEnd="16dp"
+                  android:elevation="4dp">
+                  <ImageButton
+                      android:id="@+id/btn_back_ext"
+                      android:layout_width="48dp"
+                      android:layout_height="48dp"
+                      android:background="?attr/selectableItemBackgroundBorderless"
+                      android:src="@drawable/ic_arrow_back"
+                      android:padding="12dp"
+                      android:contentDescription="Back"/>
+                  <TextView
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="Extensions"
+                      android:textColor="#E8EAED"
+                      android:textSize="20sp"
+                      android:textStyle="bold"/>
+              </LinearLayout>
+
+              <!-- Install buttons -->
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal"
+                  android:padding="16dp"
+                  android:gravity="center">
+
+                  <com.google.android.material.button.MaterialButton
+                      android:id="@+id/btn_install_from_file"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:layout_marginEnd="8dp"
+                      android:text="From File"
+                      style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                      android:textColor="#8AB4F8"/>
+
+                  <com.google.android.material.button.MaterialButton
+                      android:id="@+id/btn_install_from_url"
+                      android:layout_width="0dp"
+                      android:layout_height="wrap_content"
+                      android:layout_weight="1"
+                      android:text="From URL"
+                      android:backgroundTint="#1A73E8"
+                      android:textColor="#FFFFFF"/>
+
+              </LinearLayout>
+
+              <View
+                  android:layout_width="match_parent"
+                  android:layout_height="1dp"
+                  android:background="#3C4043"
+                  android:layout_marginBottom="8dp"/>
 
               <TextView
                   android:layout_width="wrap_content"
                   android:layout_height="wrap_content"
-                  android:text="Extension Manager"
-                  android:textSize="20sp"
-                  android:textStyle="bold"
-                  android:layout_marginBottom="16dp" />
+                  android:text="Installed"
+                  android:textColor="#9AA0A6"
+                  android:textSize="12sp"
+                  android:textAllCaps="true"
+                  android:letterSpacing="0.1"
+                  android:paddingStart="16dp"
+                  android:paddingBottom="8dp"/>
 
-              <Button
-                  android:id="@+id/btn_install_from_file"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Install from File (.zip / .xpi)" />
-
-              <Button
-                  android:id="@+id/btn_install_from_url"
-                  android:layout_width="match_parent"
-                  android:layout_height="wrap_content"
-                  android:text="Install from URL (AMO / Direct)" />
-
-              <TextView
-                  android:layout_width="wrap_content"
-                  android:layout_height="wrap_content"
-                  android:text="Installed Extensions"
-                  android:textSize="16sp"
-                  android:textStyle="bold"
-                  android:layout_marginTop="16dp"
-                  android:layout_marginBottom="8dp" />
-
-              <ListView
+              <androidx.recyclerview.widget.RecyclerView
                   android:id="@+id/extension_list"
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
-                  android:layout_weight="1" />
+                  android:layout_weight="1"
+                  android:paddingStart="8dp"
+                  android:paddingEnd="8dp"/>
 
           </LinearLayout>
           EXTXML
@@ -730,14 +1052,17 @@ jobs:
           cat > app/src/main/res/menu/browser_menu.xml << 'MENUXML'
           <?xml version="1.0" encoding="utf-8"?>
           <menu xmlns:android="http://schemas.android.com/apk/res/android">
-              <item android:id="@+id/menu_new_tab" android:title="New Tab" />
-              <item android:id="@+id/menu_close_tab" android:title="Close Tab" />
-              <item android:id="@+id/menu_extensions" android:title="Extensions" />
-              <item android:id="@+id/menu_settings" android:title="Settings" />
+              <item android:id="@+id/menu_new_tab"       android:title="New tab"/>
+              <item android:id="@+id/menu_new_incognito" android:title="New Incognito tab"/>
+              <item android:id="@+id/menu_refresh"       android:title="Refresh"/>
+              <item android:id="@+id/menu_close_tab"     android:title="Close tab"/>
+              <item android:id="@+id/menu_extensions"    android:title="Extensions"/>
+              <item android:id="@+id/menu_find_in_page"  android:title="Find in page"/>
+              <item android:id="@+id/menu_settings"      android:title="Settings"/>
           </menu>
           MENUXML
 
-          # themes and colors
+          # themes and colors - Chrome dark theme
           cat > app/src/main/res/values/themes.xml << 'THEMES'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
@@ -745,10 +1070,27 @@ jobs:
                   <item name="colorPrimary">#1A73E8</item>
                   <item name="colorPrimaryVariant">#1558B0</item>
                   <item name="colorOnPrimary">#FFFFFF</item>
-                  <item name="android:statusBarColor">#1E1E1E</item>
+                  <item name="colorSurface">#202124</item>
+                  <item name="colorOnSurface">#E8EAED</item>
+                  <item name="android:windowBackground">#202124</item>
+                  <item name="android:statusBarColor">#202124</item>
+                  <item name="android:navigationBarColor">#202124</item>
+                  <item name="popupMenuStyle">@style/ChromePopupMenu</item>
+              </style>
+              <style name="ChromePopupMenu" parent="Widget.MaterialComponents.PopupMenu">
+                  <item name="android:popupBackground">@drawable/popup_bg</item>
               </style>
           </resources>
           THEMES
+
+          cat > app/src/main/res/drawable/popup_bg.xml << 'POPUPBG'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <corners android:radius="8dp"/>
+              <solid android:color="#292A2D"/>
+          </shape>
+          POPUPBG
 
           cat > app/src/main/res/values/strings.xml << 'STRINGS'
           <?xml version="1.0" encoding="utf-8"?>
