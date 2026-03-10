@@ -235,7 +235,12 @@ jobs:
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_main)
 
-                  runtime = GeckoRuntime.getDefault(this)
+                  val runtimeSettings = GeckoRuntimeSettings.Builder()
+                      .userAgentOverride(
+                          "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
+                          "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0")
+                      .build()
+                  runtime = GeckoRuntime.create(this, runtimeSettings)
 
                   geckoView     = findViewById(R.id.gecko_view)
                   urlBar        = findViewById(R.id.url_bar)
@@ -752,6 +757,7 @@ jobs:
               xmlns:app="http://schemas.android.com/apk/res-auto"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
+              android:fitsSystemWindows="true"
               android:background="#202124">
 
               <!-- Web content — full screen, toolbar overlays at bottom -->
