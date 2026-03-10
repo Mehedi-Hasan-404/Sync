@@ -420,6 +420,7 @@ jobs:
           import android.view.LayoutInflater
           import android.view.View
           import android.view.ViewGroup
+          import android.widget.ImageButton
           import android.widget.TextView
           import androidx.recyclerview.widget.RecyclerView
 
@@ -477,7 +478,7 @@ jobs:
                   const val PICK_EXTENSION = 1001
               }
 
-              private lateinit var extensionList: androidx.recyclerview.widget.RecyclerView
+              private lateinit var extensionList: android.widget.ListView
               private val installedExtensions = mutableListOf<String>()
               private lateinit var extAdapter: ArrayAdapter<String>
 
@@ -489,7 +490,6 @@ jobs:
 
                   extensionList = findViewById(R.id.extension_list)
                   extAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, installedExtensions)
-                  extensionList.layoutManager = androidx.recyclerview.widget.LinearLayoutManager(this)
                   extensionList.adapter = extAdapter
 
                   loadInstalledExtensions()
@@ -1037,7 +1037,7 @@ jobs:
                   android:paddingStart="16dp"
                   android:paddingBottom="8dp"/>
 
-              <androidx.recyclerview.widget.RecyclerView
+              <ListView
                   android:id="@+id/extension_list"
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
