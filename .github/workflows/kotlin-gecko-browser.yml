@@ -262,7 +262,7 @@ jobs:
 
                   if (appRuntime == null) {
                       val runtimeSettings = GeckoRuntimeSettings.Builder()
-                          .userAgentOverride(
+                          .userAgent(
                               "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
                               "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0")
                           .build()
@@ -570,6 +570,10 @@ jobs:
               }
 
               private fun installExtensionFromUri(uri: Uri) {
+                  val runtime = MainActivity.appRuntime ?: run {
+                      runOnUiThread { Toast.makeText(this, "Browser not initialised", Toast.LENGTH_SHORT).show() }
+                      return
+                  }
                   Thread {
                   try {
                       val fileName = getFileName(uri) ?: "extension_${System.currentTimeMillis()}"
@@ -594,7 +598,6 @@ jobs:
                           }
                       }
 
-                      val runtime = MainActivity.appRuntime ?: return@Thread
                       runtime.webExtensionController.install("file://${extDir.absolutePath}/")
                           .accept({ ext: WebExtension? ->
                               runOnUiThread {
@@ -624,8 +627,11 @@ jobs:
                       .setPositiveButton("Install") { _, _ ->
                           val url = input.text.toString()
                           if (url.isNotEmpty()) {
-                              val runtime = MainActivity.appRuntime ?: return
-                              runtime.webExtensionController.install(url)
+                              val rt = MainActivity.appRuntime ?: run {
+                                  Toast.makeText(this@ExtensionManagerActivity, "Browser not initialised", Toast.LENGTH_SHORT).show()
+                                  return@setPositiveButton
+                              }
+                              rt.webExtensionController.install(url)
                                   .accept({ ext: WebExtension? ->
                                       runOnUiThread {
                                           installedExtensions.add(ext?.id ?: url)
