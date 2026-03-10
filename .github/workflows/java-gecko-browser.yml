@@ -279,11 +279,11 @@ jobs:
               private void openNewTab(String url) {
                   GeckoSession session = new GeckoSession();
 
-                  session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
+                  session.setProgressDelegate(new GeckoSession.ProgressDelegate() {
                       @Override
-                      public void onLocationChange(@NonNull GeckoSession session, String url) {
+                      public void onPageStart(@NonNull GeckoSession session, @NonNull String url) {
                           runOnUiThread(() -> urlBar.setText(url));
-                          if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).setUrl(url != null ? url : "");
+                          if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).setUrl(url);
                       }
                   });
 
