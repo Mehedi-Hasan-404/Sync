@@ -1,0 +1,790 @@
+name: Build Kotlin Gecko Browser
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Install Android build tools and NDK
+        run: |
+          sdkmanager "build-tools;34.0.0" "platforms;android-34" "ndk;25.2.9519653"
+
+      - name: Create Kotlin Gecko Browser project structure
+        run: |
+          mkdir -p KotlinGeckoBrowser
+          cd KotlinGeckoBrowser
+
+          # Root build.gradle.kts
+          cat > build.gradle.kts << 'GRADLE'
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+              dependencies {
+                  classpath("com.android.tools.build:gradle:8.2.2")
+                  classpath("org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.22")
+              }
+          }
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+                  maven { url = uri("https://maven.mozilla.org/maven2") }
+              }
+          }
+
+          tasks.register("clean", Delete::class) {
+              delete(rootProject.buildDir)
+          }
+          GRADLE
+
+          # settings.gradle.kts
+          cat > settings.gradle.kts << 'SETTINGS'
+          rootProject.name = "KotlinGeckoBrowser"
+          include(":app")
+          SETTINGS
+
+          # gradle.properties
+          cat > gradle.properties << 'PROPS'
+          android.useAndroidX=true
+          android.enableJetifier=true
+          kotlin.code.style=official
+          PROPS
+
+          mkdir -p app/src/main/kotlin/com/personal/geckobrowser
+          mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/menu
+          mkdir -p app/src/main/res/values
+          mkdir -p app/src/main/res/drawable
+          mkdir -p app/src/main/assets/extensions
+
+          # app/build.gradle.kts
+          cat > app/build.gradle.kts << 'APPGRADLE'
+          plugins {
+              id("com.android.application")
+              id("kotlin-android")
+          }
+
+          android {
+              namespace = "com.personal.geckobrowser"
+              compileSdk = 34
+
+              defaultConfig {
+                  applicationId = "com.personal.geckobrowser"
+                  minSdk = 21
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+
+              buildTypes {
+                  release {
+                      isMinifyEnabled = false
+                      proguardFiles(
+                          getDefaultProguardFile("proguard-android-optimize.txt"),
+                          "proguard-rules.pro"
+                      )
+                  }
+              }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
+
+              buildFeatures {
+                  viewBinding = true
+              }
+          }
+
+          dependencies {
+              implementation("org.mozilla.geckoview:geckoview:119.0.20231023215731")
+              implementation("androidx.core:core-ktx:1.12.0")
+              implementation("androidx.appcompat:appcompat:1.6.1")
+              implementation("com.google.android.material:material:1.11.0")
+              implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+              implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+              implementation("androidx.recyclerview:recyclerview:1.3.2")
+              implementation("androidx.documentfile:documentfile:1.0.1")
+          }
+          APPGRADLE
+
+          # AndroidManifest.xml
+          cat > app/src/main/AndroidManifest.xml << 'MANIFEST'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                  android:maxSdkVersion="32" />
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+              <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+                  android:maxSdkVersion="28" />
+              <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
+
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="Personal Browser"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.GeckoBrowser"
+                  android:hardwareAccelerated="true"
+                  android:largeHeap="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:windowSoftInputMode="adjustResize"
+                      android:configChanges="orientation|screenSize|keyboardHidden">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+
+                  <activity
+                      android:name=".ExtensionManagerActivity"
+                      android:exported="false"
+                      android:label="Extension Manager" />
+
+              </application>
+          </manifest>
+          MANIFEST
+
+          # MainActivity.kt
+          cat > app/src/main/kotlin/com/personal/geckobrowser/MainActivity.kt << 'MAINKT'
+          package com.personal.geckobrowser
+
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.view.ContextMenu
+          import android.view.MenuItem
+          import android.view.View
+          import android.view.inputmethod.EditorInfo
+          import android.widget.*
+          import androidx.appcompat.app.AlertDialog
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import androidx.recyclerview.widget.RecyclerView
+          import com.google.android.material.floatingactionbutton.FloatingActionButton
+          import org.mozilla.geckoview.*
+          import org.mozilla.geckoview.GeckoSession.NavigationDelegate
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var runtime: GeckoRuntime
+              private lateinit var geckoView: GeckoView
+              private lateinit var urlBar: EditText
+              private lateinit var tabsContainer: RecyclerView
+              private lateinit var tabAdapter: TabAdapter
+              private val tabs = mutableListOf<BrowserTab>()
+              private var currentTabIndex = 0
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+
+                  runtime = GeckoRuntime.getDefault(this)
+                  setupDRM()
+
+                  geckoView = findViewById(R.id.gecko_view)
+                  urlBar = findViewById(R.id.url_bar)
+                  tabsContainer = findViewById(R.id.tabs_recycler)
+
+                  setupTabs()
+                  setupUrlBar()
+                  setupButtons()
+                  openNewTab("https://www.google.com")
+              }
+
+              private fun setupDRM() {
+                  val settings = GeckoRuntimeSettings.Builder()
+                      .remoteDebuggingEnabled(false)
+                      .consoleOutput(false)
+                      .build()
+                  // DRM (Widevine) is enabled by default in GeckoView — no restrictions
+              }
+
+              private fun setupTabs() {
+                  tabAdapter = TabAdapter(tabs) { index -> switchToTab(index) }
+                  tabsContainer.layoutManager = LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false)
+                  tabsContainer.adapter = tabAdapter
+              }
+
+              private fun setupUrlBar() {
+                  urlBar.setOnEditorActionListener { _, actionId, _ ->
+                      if (actionId == EditorInfo.IME_ACTION_GO ||
+                          actionId == EditorInfo.IME_ACTION_DONE) {
+                          loadUrl(urlBar.text.toString())
+                          true
+                      } else false
+                  }
+              }
+
+              private fun setupButtons() {
+                  findViewById<ImageButton>(R.id.btn_back).setOnClickListener {
+                      tabs.getOrNull(currentTabIndex)?.session?.goBack()
+                  }
+                  findViewById<ImageButton>(R.id.btn_forward).setOnClickListener {
+                      tabs.getOrNull(currentTabIndex)?.session?.goForward()
+                  }
+                  findViewById<ImageButton>(R.id.btn_refresh).setOnClickListener {
+                      tabs.getOrNull(currentTabIndex)?.session?.reload()
+                  }
+                  findViewById<FloatingActionButton>(R.id.btn_new_tab).setOnClickListener {
+                      openNewTab("https://www.google.com")
+                  }
+                  findViewById<ImageButton>(R.id.btn_extensions).setOnClickListener {
+                      startActivity(Intent(this, ExtensionManagerActivity::class.java))
+                  }
+                  findViewById<ImageButton>(R.id.btn_menu).setOnClickListener { v ->
+                      showBrowserMenu(v)
+                  }
+              }
+
+              private fun openNewTab(url: String) {
+                  val session = GeckoSession()
+                  session.settings.usePrivateMode = false
+
+                  session.navigationDelegate = object : NavigationDelegate {
+                      override fun onLocationChange(
+                          session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean
+                      ) {
+                          runOnUiThread { urlBar.setText(url) }
+                      }
+                  }
+
+                  session.open(runtime)
+                  val tab = BrowserTab(session, url)
+                  tabs.add(tab)
+                  tabAdapter.notifyItemInserted(tabs.size - 1)
+                  switchToTab(tabs.size - 1)
+                  session.loadUri(url)
+              }
+
+              private fun switchToTab(index: Int) {
+                  currentTabIndex = index
+                  val session = tabs[index].session
+                  geckoView.setSession(session)
+                  urlBar.setText(tabs[index].url)
+              }
+
+              private fun loadUrl(input: String) {
+                  val url = if (input.startsWith("http://") || input.startsWith("https://")) {
+                      input
+                  } else if (input.contains(".") && !input.contains(" ")) {
+                      "https://$input"
+                  } else {
+                      "https://www.google.com/search?q=${Uri.encode(input)}"
+                  }
+                  tabs.getOrNull(currentTabIndex)?.session?.loadUri(url)
+                  tabs.getOrNull(currentTabIndex)?.url = url
+              }
+
+              private fun showBrowserMenu(anchor: View) {
+                  val popup = PopupMenu(this, anchor)
+                  popup.menuInflater.inflate(R.menu.browser_menu, popup.menu)
+                  popup.setOnMenuItemClickListener { item ->
+                      when (item.itemId) {
+                          R.id.menu_new_tab -> { openNewTab("https://www.google.com"); true }
+                          R.id.menu_close_tab -> { closeCurrentTab(); true }
+                          R.id.menu_extensions -> {
+                              startActivity(Intent(this, ExtensionManagerActivity::class.java)); true
+                          }
+                          R.id.menu_settings -> { showSettingsDialog(); true }
+                          else -> false
+                      }
+                  }
+                  popup.show()
+              }
+
+              private fun closeCurrentTab() {
+                  if (tabs.size <= 1) {
+                      openNewTab("https://www.google.com")
+                      return
+                  }
+                  tabs[currentTabIndex].session.close()
+                  tabs.removeAt(currentTabIndex)
+                  tabAdapter.notifyDataSetChanged()
+                  switchToTab(maxOf(0, currentTabIndex - 1))
+              }
+
+              private fun showSettingsDialog() {
+                  AlertDialog.Builder(this)
+                      .setTitle("Settings")
+                      .setMessage("GeckoView Browser\nDRM: Enabled\nExtensions: Supported")
+                      .setPositiveButton("OK", null)
+                      .show()
+              }
+          }
+
+          data class BrowserTab(val session: GeckoSession, var url: String)
+          MAINKT
+
+          # TabAdapter.kt
+          cat > app/src/main/kotlin/com/personal/geckobrowser/TabAdapter.kt << 'TABKT'
+          package com.personal.geckobrowser
+
+          import android.view.LayoutInflater
+          import android.view.View
+          import android.view.ViewGroup
+          import android.widget.TextView
+          import androidx.recyclerview.widget.RecyclerView
+
+          class TabAdapter(
+              private val tabs: List<BrowserTab>,
+              private val onTabClick: (Int) -> Unit
+          ) : RecyclerView.Adapter<TabAdapter.TabViewHolder>() {
+
+              inner class TabViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+                  val tabTitle: TextView = view.findViewById(R.id.tab_title)
+              }
+
+              override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): TabViewHolder {
+                  val view = LayoutInflater.from(parent.context)
+                      .inflate(R.layout.item_tab, parent, false)
+                  return TabViewHolder(view)
+              }
+
+              override fun onBindViewHolder(holder: TabViewHolder, position: Int) {
+                  holder.tabTitle.text = tabs[position].url.take(20) + "..."
+                  holder.itemView.setOnClickListener { onTabClick(position) }
+              }
+
+              override fun getItemCount() = tabs.size
+          }
+          TABKT
+
+          # ExtensionManagerActivity.kt
+          cat > app/src/main/kotlin/com/personal/geckobrowser/ExtensionManagerActivity.kt << 'EXTKT'
+          package com.personal.geckobrowser
+
+          import android.app.Activity
+          import android.content.Intent
+          import android.net.Uri
+          import android.os.Bundle
+          import android.provider.OpenableColumns
+          import android.widget.*
+          import androidx.appcompat.app.AppCompatActivity
+          import org.mozilla.geckoview.GeckoRuntime
+          import org.mozilla.geckoview.WebExtension
+          import java.io.File
+          import java.io.FileOutputStream
+          import java.util.zip.ZipInputStream
+
+          class ExtensionManagerActivity : AppCompatActivity() {
+
+              companion object {
+                  const val PICK_EXTENSION = 1001
+              }
+
+              private lateinit var extensionList: ListView
+              private val installedExtensions = mutableListOf<String>()
+              private lateinit var adapter: ArrayAdapter<String>
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_extension_manager)
+
+                  extensionList = findViewById(R.id.extension_list)
+                  adapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, installedExtensions)
+                  extensionList.adapter = adapter
+
+                  loadInstalledExtensions()
+
+                  findViewById<Button>(R.id.btn_install_from_file).setOnClickListener {
+                      val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                          type = "*/*"
+                          putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
+                              "application/zip",
+                              "application/x-zip-compressed",
+                              "application/octet-stream",
+                              "application/x-xpinstall"
+                          ))
+                      }
+                      startActivityForResult(intent, PICK_EXTENSION)
+                  }
+
+                  findViewById<Button>(R.id.btn_install_from_url).setOnClickListener {
+                      showUrlInstallDialog()
+                  }
+              }
+
+              private fun loadInstalledExtensions() {
+                  val extDir = File(filesDir, "extensions")
+                  if (extDir.exists()) {
+                      extDir.listFiles()?.forEach {
+                          installedExtensions.add(it.name)
+                      }
+                      adapter.notifyDataSetChanged()
+                  }
+              }
+
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == PICK_EXTENSION && resultCode == Activity.RESULT_OK) {
+                      data?.data?.let { uri -> installExtensionFromUri(uri) }
+                  }
+              }
+
+              private fun installExtensionFromUri(uri: Uri) {
+                  try {
+                      val fileName = getFileName(uri) ?: "extension_${System.currentTimeMillis()}"
+                      val extDir = File(filesDir, "extensions/${fileName.removeSuffix(".zip").removeSuffix(".xpi")}")
+                      extDir.mkdirs()
+
+                      contentResolver.openInputStream(uri)?.use { input ->
+                          ZipInputStream(input).use { zip ->
+                              var entry = zip.nextEntry
+                              while (entry != null) {
+                                  val file = File(extDir, entry.name)
+                                  if (entry.isDirectory) {
+                                      file.mkdirs()
+                                  } else {
+                                      file.parentFile?.mkdirs()
+                                      FileOutputStream(file).use { out ->
+                                          zip.copyTo(out)
+                                      }
+                                  }
+                                  entry = zip.nextEntry
+                              }
+                          }
+                      }
+
+                      val runtime = GeckoRuntime.getDefault(this)
+                      runtime.webExtensionController.install("file://${extDir.absolutePath}/")
+                          .accept({ ext ->
+                              runOnUiThread {
+                                  installedExtensions.add(ext?.id ?: extDir.name)
+                                  adapter.notifyDataSetChanged()
+                                  Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
+                              }
+                          }, { throwable ->
+                              runOnUiThread {
+                                  Toast.makeText(this, "Install failed: ${throwable?.message}", Toast.LENGTH_LONG).show()
+                              }
+                          })
+                  } catch (e: Exception) {
+                      Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                  }
+              }
+
+              private fun showUrlInstallDialog() {
+                  val input = EditText(this)
+                  input.hint = "https://addons.mozilla.org/..."
+                  androidx.appcompat.app.AlertDialog.Builder(this)
+                      .setTitle("Install Extension from URL")
+                      .setView(input)
+                      .setPositiveButton("Install") { _, _ ->
+                          val url = input.text.toString()
+                          if (url.isNotEmpty()) {
+                              val runtime = GeckoRuntime.getDefault(this)
+                              runtime.webExtensionController.install(url)
+                                  .accept({ ext ->
+                                      runOnUiThread {
+                                          installedExtensions.add(ext?.id ?: url)
+                                          adapter.notifyDataSetChanged()
+                                          Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
+                                      }
+                                  }, { throwable ->
+                                      runOnUiThread {
+                                          Toast.makeText(this, "Failed: ${throwable?.message}", Toast.LENGTH_LONG).show()
+                                      }
+                                  })
+                          }
+                      }
+                      .setNegativeButton("Cancel", null)
+                      .show()
+              }
+
+              private fun getFileName(uri: Uri): String? {
+                  contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                      val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                      cursor.moveToFirst()
+                      return cursor.getString(nameIndex)
+                  }
+                  return null
+              }
+          }
+          EXTKT
+
+          # activity_main.xml
+          cat > app/src/main/res/layout/activity_main.xml << 'MAINXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical">
+
+              <!-- Tab Bar -->
+              <androidx.recyclerview.widget.RecyclerView
+                  android:id="@+id/tabs_recycler"
+                  android:layout_width="match_parent"
+                  android:layout_height="48dp"
+                  android:background="#1E1E1E"
+                  android:paddingStart="4dp"
+                  android:paddingEnd="4dp" />
+
+              <!-- URL Bar + Controls -->
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="52dp"
+                  android:background="#2D2D2D"
+                  android:gravity="center_vertical"
+                  android:orientation="horizontal"
+                  android:paddingStart="4dp"
+                  android:paddingEnd="4dp">
+
+                  <ImageButton
+                      android:id="@+id/btn_back"
+                      android:layout_width="36dp"
+                      android:layout_height="36dp"
+                      android:background="?attr/selectableItemBackgroundBorderless"
+                      android:src="@android:drawable/ic_media_previous"
+                      android:tint="#FFFFFF" />
+
+                  <ImageButton
+                      android:id="@+id/btn_forward"
+                      android:layout_width="36dp"
+                      android:layout_height="36dp"
+                      android:background="?attr/selectableItemBackgroundBorderless"
+                      android:src="@android:drawable/ic_media_next"
+                      android:tint="#FFFFFF" />
+
+                  <ImageButton
+                      android:id="@+id/btn_refresh"
+                      android:layout_width="36dp"
+                      android:layout_height="36dp"
+                      android:background="?attr/selectableItemBackgroundBorderless"
+                      android:src="@android:drawable/ic_menu_rotate"
+                      android:tint="#FFFFFF" />
+
+                  <EditText
+                      android:id="@+id/url_bar"
+                      android:layout_width="0dp"
+                      android:layout_height="36dp"
+                      android:layout_weight="1"
+                      android:background="@android:drawable/edit_text"
+                      android:hint="Search or enter URL"
+                      android:imeOptions="actionGo"
+                      android:inputType="textUri"
+                      android:maxLines="1"
+                      android:paddingStart="8dp"
+                      android:paddingEnd="8dp"
+                      android:singleLine="true"
+                      android:textColor="#FFFFFF"
+                      android:textColorHint="#888888"
+                      android:textSize="14sp" />
+
+                  <ImageButton
+                      android:id="@+id/btn_extensions"
+                      android:layout_width="36dp"
+                      android:layout_height="36dp"
+                      android:background="?attr/selectableItemBackgroundBorderless"
+                      android:src="@android:drawable/ic_menu_add"
+                      android:tint="#FFFFFF" />
+
+                  <ImageButton
+                      android:id="@+id/btn_menu"
+                      android:layout_width="36dp"
+                      android:layout_height="36dp"
+                      android:background="?attr/selectableItemBackgroundBorderless"
+                      android:src="@android:drawable/ic_menu_more"
+                      android:tint="#FFFFFF" />
+
+              </LinearLayout>
+
+              <!-- GeckoView -->
+              <org.mozilla.geckoview.GeckoView
+                  android:id="@+id/gecko_view"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1" />
+
+              <!-- New Tab FAB -->
+              <com.google.android.material.floatingactionbutton.FloatingActionButton
+                  android:id="@+id/btn_new_tab"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_gravity="end|bottom"
+                  android:layout_margin="16dp"
+                  android:src="@android:drawable/ic_input_add"
+                  android:contentDescription="New Tab" />
+
+          </LinearLayout>
+          MAINXML
+
+          # item_tab.xml
+          cat > app/src/main/res/layout/item_tab.xml << 'TABXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="120dp"
+              android:layout_height="match_parent"
+              android:background="#333333"
+              android:gravity="center_vertical"
+              android:orientation="horizontal"
+              android:padding="8dp"
+              android:layout_marginEnd="2dp">
+
+              <TextView
+                  android:id="@+id/tab_title"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:ellipsize="end"
+                  android:maxLines="1"
+                  android:textColor="#FFFFFF"
+                  android:textSize="12sp" />
+          </LinearLayout>
+          TABXML
+
+          # activity_extension_manager.xml
+          cat > app/src/main/res/layout/activity_extension_manager.xml << 'EXTXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:padding="16dp">
+
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="Extension Manager"
+                  android:textSize="20sp"
+                  android:textStyle="bold"
+                  android:layout_marginBottom="16dp" />
+
+              <Button
+                  android:id="@+id/btn_install_from_file"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Install from File (.zip / .xpi)" />
+
+              <Button
+                  android:id="@+id/btn_install_from_url"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:text="Install from URL (AMO / Direct)" />
+
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="Installed Extensions"
+                  android:textSize="16sp"
+                  android:textStyle="bold"
+                  android:layout_marginTop="16dp"
+                  android:layout_marginBottom="8dp" />
+
+              <ListView
+                  android:id="@+id/extension_list"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1" />
+
+          </LinearLayout>
+          EXTXML
+
+          # browser_menu.xml
+          cat > app/src/main/res/menu/browser_menu.xml << 'MENUXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <menu xmlns:android="http://schemas.android.com/apk/res/android">
+              <item android:id="@+id/menu_new_tab" android:title="New Tab" />
+              <item android:id="@+id/menu_close_tab" android:title="Close Tab" />
+              <item android:id="@+id/menu_extensions" android:title="Extensions" />
+              <item android:id="@+id/menu_settings" android:title="Settings" />
+          </menu>
+          MENUXML
+
+          # themes and colors
+          cat > app/src/main/res/values/themes.xml << 'THEMES'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="Theme.GeckoBrowser" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+                  <item name="colorPrimary">#1A73E8</item>
+                  <item name="colorPrimaryVariant">#1558B0</item>
+                  <item name="colorOnPrimary">#FFFFFF</item>
+                  <item name="android:statusBarColor">#1E1E1E</item>
+              </style>
+          </resources>
+          THEMES
+
+          cat > app/src/main/res/values/strings.xml << 'STRINGS'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <string name="app_name">Personal Browser</string>
+          </resources>
+          STRINGS
+
+          cat > app/proguard-rules.pro << 'PROGUARD'
+          -keep class org.mozilla.geckoview.** { *; }
+          PROGUARD
+
+      - name: Setup Gradle wrapper for Kotlin project
+        run: |
+          cd KotlinGeckoBrowser
+          gradle wrapper --gradle-version=8.4 || true
+          mkdir -p gradle/wrapper
+          cat > gradle/wrapper/gradle-wrapper.properties << 'WRAPPERPROPS'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.4-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          WRAPPERPROPS
+
+      - name: Install Gradle
+        uses: gradle/gradle-build-action@v3
+        with:
+          gradle-version: '8.4'
+
+      - name: Build Kotlin Gecko Browser Debug APK
+        working-directory: KotlinGeckoBrowser
+        run: gradle assembleDebug --no-daemon --stacktrace
+
+      - name: Upload Kotlin Gecko Browser APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KotlinGeckoBrowser-debug-apk
+          path: KotlinGeckoBrowser/app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
+
+      - name: Build Kotlin Gecko Browser Release APK (unsigned)
+        working-directory: KotlinGeckoBrowser
+        run: gradle assembleRelease --no-daemon --stacktrace
+
+      - name: Upload Kotlin Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: KotlinGeckoBrowser-release-unsigned-apk
+          path: KotlinGeckoBrowser/app/build/outputs/apk/release/app-release-unsigned.apk
+          retention-days: 30
