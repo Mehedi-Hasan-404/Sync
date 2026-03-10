@@ -82,6 +82,41 @@ jobs:
           mkdir -p app/src/main/res/values
           mkdir -p app/src/main/res/drawable
           mkdir -p app/src/main/assets/extensions
+          mkdir -p app/src/main/res/mipmap-mdpi
+          mkdir -p app/src/main/res/mipmap-hdpi
+          mkdir -p app/src/main/res/mipmap-xhdpi
+          mkdir -p app/src/main/res/mipmap-xxhdpi
+          mkdir -p app/src/main/res/mipmap-xxxhdpi
+
+          # Generate launcher icons (solid blue circle PNG) for each density
+          python3 - << 'ICONGEN'
+import struct, zlib, os
+
+def make_png(size):
+    def chunk(name, data):
+        c = struct.pack('>I', len(data)) + name + data
+        return c + struct.pack('>I', zlib.crc32(c[4:]) & 0xffffffff)
+    ihdr = struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)
+    rows = []
+    for y in range(size):
+        row = b'\x00'
+        for x in range(size):
+            cx, cy = x - size/2, y - size/2
+            if cx*cx + cy*cy <= (size/2 - 2)**2:
+                row += bytes([30, 120, 220])  # blue
+            else:
+                row += bytes([240, 240, 240])  # light grey bg
+        rows.append(row)
+    idat = zlib.compress(b''.join(rows))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', idat) + chunk(b'IEND', b'')
+
+densities = {'mipmap-mdpi':48,'mipmap-hdpi':72,'mipmap-xhdpi':96,'mipmap-xxhdpi':144,'mipmap-xxxhdpi':192}
+for d, s in densities.items():
+    path = f'app/src/main/res/{d}/ic_launcher.png'
+    with open(path, 'wb') as f:
+        f.write(make_png(s))
+    print(f'Created {path} ({s}x{s})')
+ICONGEN
 
           # app/build.gradle.kts
           cat > app/build.gradle.kts << 'APPGRADLE'
