@@ -55,6 +55,13 @@ jobs:
                   mavenCentral()
                   maven { url = uri("https://maven.mozilla.org/maven2") }
               }
+              configurations.all {
+                  resolutionStrategy {
+                      force("org.jetbrains.kotlin:kotlin-stdlib:2.0.21")
+                      force("org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.0.21")
+                      force("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.0.21")
+                  }
+              }
           }
 
           tasks.register("clean", Delete::class) {
@@ -291,7 +298,7 @@ jobs:
 
                   session.navigationDelegate = object : NavigationDelegate {
                       override fun onLocationChange(
-                          session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>, hasUserGesture: Boolean
+                          session: GeckoSession, url: String?, perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>
                       ) {
                           runOnUiThread { urlBar.setText(url) }
                       }
@@ -496,13 +503,13 @@ jobs:
 
                       val runtime = GeckoRuntime.getDefault(this)
                       runtime.webExtensionController.install("file://${extDir.absolutePath}/")
-                          .accept({ ext ->
+                          .accept({ ext: WebExtension? ->
                               runOnUiThread {
                                   installedExtensions.add(ext?.id ?: extDir.name)
                                   adapter.notifyDataSetChanged()
                                   Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
                               }
-                          }, { throwable ->
+                          }, { throwable: Throwable? ->
                               runOnUiThread {
                                   Toast.makeText(this, "Install failed: ${throwable?.message}", Toast.LENGTH_LONG).show()
                               }
@@ -523,13 +530,13 @@ jobs:
                           if (url.isNotEmpty()) {
                               val runtime = GeckoRuntime.getDefault(this)
                               runtime.webExtensionController.install(url)
-                                  .accept({ ext ->
+                                  .accept({ ext: WebExtension? ->
                                       runOnUiThread {
                                           installedExtensions.add(ext?.id ?: url)
                                           adapter.notifyDataSetChanged()
                                           Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
                                       }
-                                  }, { throwable ->
+                                  }, { throwable: Throwable? ->
                                       runOnUiThread {
                                           Toast.makeText(this, "Failed: ${throwable?.message}", Toast.LENGTH_LONG).show()
                                       }
