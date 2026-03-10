@@ -259,7 +259,7 @@ jobs:
 
                   if (AppRuntime.runtime == null) {
                       GeckoRuntimeSettings runtimeSettings = new GeckoRuntimeSettings.Builder()
-                          .userAgentOverride(
+                          .userAgent(
                               "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
                               "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0")
                           .build();
