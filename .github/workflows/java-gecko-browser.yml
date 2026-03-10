@@ -28,7 +28,7 @@ jobs:
             SDKMANAGER="${ANDROID_HOME}/cmdline-tools/$(ls ${ANDROID_HOME}/cmdline-tools | sort -V | tail -1)/bin/sdkmanager"
           fi
           yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" "build-tools;36.0.0" "platforms;android-36"
+          "$SDKMANAGER" "build-tools;36.0.0" "platforms;android-36" "ndk;27.2.12479018" "cmake;3.22.1"
 
       - name: Create Java Gecko Browser project structure
         run: |
@@ -108,6 +108,15 @@ jobs:
                   targetSdk 36
                   versionCode 1
                   versionName '1.0'
+                  ndk {
+                      abiFilters 'arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86'
+                  }
+                  externalNativeBuild {
+                      cmake {
+                          cppFlags '-std=c++17 -O2'
+                          arguments '-DANDROID_STL=c++_shared'
+                      }
+                  }
               }
 
               buildTypes {
@@ -125,10 +134,26 @@ jobs:
               buildFeatures {
                   viewBinding true
               }
+
+              splits {
+                  abi {
+                      enable true
+                      reset()
+                      include "arm64-v8a", "armeabi-v7a", "x86_64", "x86"
+                      universalApk true
+                  }
+              }
+
+              externalNativeBuild {
+                  cmake {
+                      path 'src/main/cpp/CMakeLists.txt'
+                      version '3.22.1'
+                  }
+              }
           }
 
           dependencies {
-              implementation 'org.mozilla.geckoview:geckoview-arm64-v8a:145.0.20251124145406'
+              implementation 'org.mozilla.geckoview:geckoview:145.0.20251124145406'
               implementation 'androidx.core:core:1.12.0'
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'com.google.android.material:material:1.11.0'
@@ -241,6 +266,14 @@ jobs:
                       AppRuntime.runtime = GeckoRuntime.create(this, runtimeSettings);
                   }
                   runtime      = AppRuntime.runtime;
+
+                  // Install native crash handler and log ABI info
+                  String crashLog = getFilesDir().getAbsolutePath() + "/crash.log";
+                  NativeBridge.installCrashHandler(crashLog);
+                  android.util.Log.i("Browser", "ABI=" + NativeBridge.getAbi()
+                      + " RAM=" + NativeBridge.getAvailableRamMb() + "MB"
+                      + " kernel=" + NativeBridge.getKernelVersion());
+
                   geckoView    = findViewById(R.id.gecko_view);
                   urlBar       = findViewById(R.id.url_bar);
                   lockIcon     = findViewById(R.id.lock_icon);
@@ -1165,8 +1198,241 @@ jobs:
           </resources>
           STRINGS
 
+
+          mkdir -p app/src/main/cpp
+
+          # CMakeLists.txt
+          cat > app/src/main/cpp/CMakeLists.txt << 'CMAKELISTS'
+          cmake_minimum_required(VERSION 3.22.1)
+          project("browsernative")
+
+          add_library(browsernative SHARED
+              browser_native.cpp
+              download_helper.cpp
+              crash_handler.cpp
+          )
+
+          find_library(log-lib log)
+          find_library(android-lib android)
+
+          target_link_libraries(browsernative
+              ${log-lib}
+              ${android-lib}
+          )
+
+          target_compile_options(browsernative PRIVATE -std=c++17 -O2 -Wall)
+          CMAKELISTS
+
+          # browser_native.cpp — JNI entry point, version info, UA helpers
+          cat > app/src/main/cpp/browser_native.cpp << 'BROWSERNATIVE'
+          #include <jni.h>
+          #include <string>
+          #include <sstream>
+          #include <sys/utsname.h>
+          #include <android/log.h>
+
+          #define LOG_TAG "BrowserNative"
+          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+          extern "C" {
+
+          // Returns the native ABI string this .so was compiled for
+          JNIEXPORT jstring JNICALL
+          Java_com_personal_javageckobrowser_NativeBridge_getAbi(JNIEnv *env, jclass) {
+          #if defined(__aarch64__)
+              return env->NewStringUTF("arm64-v8a");
+          #elif defined(__arm__)
+              return env->NewStringUTF("armeabi-v7a");
+          #elif defined(__x86_64__)
+              return env->NewStringUTF("x86_64");
+          #elif defined(__i386__)
+              return env->NewStringUTF("x86");
+          #else
+              return env->NewStringUTF("unknown");
+          #endif
+          }
+
+          // Returns kernel version string — used to build a realistic UA
+          JNIEXPORT jstring JNICALL
+          Java_com_personal_javageckobrowser_NativeBridge_getKernelVersion(JNIEnv *env, jclass) {
+              struct utsname buf;
+              if (uname(&buf) == 0) {
+                  std::string ver = std::string(buf.sysname) + "/" + buf.release;
+                  return env->NewStringUTF(ver.c_str());
+              }
+              return env->NewStringUTF("Linux/unknown");
+          }
+
+          // Returns available RAM in MB via /proc/meminfo
+          JNIEXPORT jlong JNICALL
+          Java_com_personal_javageckobrowser_NativeBridge_getAvailableRamMb(JNIEnv *, jclass) {
+              FILE *f = fopen("/proc/meminfo", "r");
+              if (!f) return -1;
+              long long kb = 0;
+              char line[256];
+              while (fgets(line, sizeof(line), f)) {
+                  if (sscanf(line, "MemAvailable: %lld kB", &kb) == 1) break;
+              }
+              fclose(f);
+              return (jlong)(kb / 1024);
+          }
+
+          } // extern "C"
+          BROWSERNATIVE
+
+          # download_helper.cpp — native download chunk writer (faster than Java streams)
+          cat > app/src/main/cpp/download_helper.cpp << 'DLHELPER'
+          #include <jni.h>
+          #include <string>
+          #include <cstdio>
+          #include <cstring>
+          #include <android/log.h>
+
+          #define LOG_TAG "DownloadHelper"
+          #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
+          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+          extern "C" {
+
+          // Write a byte buffer to a file path — avoids Java stream overhead for large chunks
+          JNIEXPORT jint JNICALL
+          Java_com_personal_javageckobrowser_NativeBridge_writeChunk(
+                  JNIEnv *env, jclass,
+                  jstring filePath, jbyteArray data, jint offset, jint length, jboolean append) {
+              const char *path = env->GetStringUTFChars(filePath, nullptr);
+              jbyte *buf = env->GetByteArrayElements(data, nullptr);
+
+              FILE *f = fopen(path, append ? "ab" : "wb");
+              int written = 0;
+              if (f) {
+                  written = (int)fwrite(buf + offset, 1, length, f);
+                  fclose(f);
+              } else {
+                  LOGE("writeChunk: cannot open %s", path);
+              }
+
+              env->ReleaseByteArrayElements(data, buf, JNI_ABORT);
+              env->ReleaseStringUTFChars(filePath, path);
+              return written;
+          }
+
+          // Get file size without Java File overhead
+          JNIEXPORT jlong JNICALL
+          Java_com_personal_javageckobrowser_NativeBridge_getFileSize(
+                  JNIEnv *env, jclass, jstring filePath) {
+              const char *path = env->GetStringUTFChars(filePath, nullptr);
+              FILE *f = fopen(path, "rb");
+              long size = -1;
+              if (f) {
+                  fseek(f, 0, SEEK_END);
+                  size = ftell(f);
+                  fclose(f);
+              }
+              env->ReleaseStringUTFChars(filePath, path);
+              return (jlong)size;
+          }
+
+          } // extern "C"
+          DLHELPER
+
+          # crash_handler.cpp — installs SIGSEGV/SIGABRT handler, writes crash log to disk
+          cat > app/src/main/cpp/crash_handler.cpp << 'CRASHHANDLER'
+          #include <jni.h>
+          #include <signal.h>
+          #include <string>
+          #include <cstdio>
+          #include <ctime>
+          #include <unistd.h>
+          #include <android/log.h>
+
+          #define LOG_TAG "CrashHandler"
+          #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+
+          static std::string g_crash_log_path;
+
+          static void crash_signal_handler(int sig) {
+              if (!g_crash_log_path.empty()) {
+                  FILE *f = fopen(g_crash_log_path.c_str(), "a");
+                  if (f) {
+                      time_t t = time(nullptr);
+                      char ts[64];
+                      strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", gmtime(&t));
+                      fprintf(f, "[%s] CRASH signal=%d pid=%d\n", ts, sig, getpid());
+                      fclose(f);
+                  }
+              }
+              LOGE("Crash signal %d received", sig);
+              // Re-raise to get default core dump / system crash handling
+              signal(sig, SIG_DFL);
+              raise(sig);
+          }
+
+          extern "C" {
+
+          JNIEXPORT void JNICALL
+          Java_com_personal_javageckobrowser_NativeBridge_installCrashHandler(
+                  JNIEnv *env, jclass, jstring logPath) {
+              const char *path = env->GetStringUTFChars(logPath, nullptr);
+              g_crash_log_path = path;
+              env->ReleaseStringUTFChars(logPath, path);
+
+              struct sigaction sa{};
+              sa.sa_handler = crash_signal_handler;
+              sigemptyset(&sa.sa_mask);
+              sa.sa_flags = SA_RESETHAND;
+              sigaction(SIGSEGV, &sa, nullptr);
+              sigaction(SIGABRT, &sa, nullptr);
+              sigaction(SIGBUS,  &sa, nullptr);
+          }
+
+          } // extern "C"
+          CRASHHANDLER
+
+          # NativeBridge.java — JNI declarations + System.loadLibrary
+          cat > app/src/main/java/com/personal/javageckobrowser/NativeBridge.java << 'NATIVEBRIDGE'
+          package com.personal.javageckobrowser;
+
+          public final class NativeBridge {
+
+              static {
+                  System.loadLibrary("browsernative");
+              }
+
+              private NativeBridge() {}
+
+              /** Returns the ABI this binary was compiled for, e.g. "arm64-v8a" */
+              public static native String getAbi();
+
+              /** Returns kernel version string, e.g. "Linux/5.15.123-android14" */
+              public static native String getKernelVersion();
+
+              /** Returns available RAM in MB from /proc/meminfo */
+              public static native long getAvailableRamMb();
+
+              /**
+               * Writes {@code length} bytes from {@code data[offset..]} to {@code filePath}.
+               * If {@code append} is true, opens the file in append mode.
+               * Returns the number of bytes written, or -1 on error.
+               */
+              public static native int writeChunk(String filePath, byte[] data,
+                                                  int offset, int length, boolean append);
+
+              /** Returns the size of the file at {@code filePath}, or -1 if not found. */
+              public static native long getFileSize(String filePath);
+
+              /**
+               * Installs a native SIGSEGV/SIGABRT/SIGBUS handler that appends a
+               * one-line crash entry to {@code logPath} before re-raising the signal.
+               */
+              public static native void installCrashHandler(String logPath);
+          }
+          NATIVEBRIDGE
+
           cat > app/proguard-rules.pro << 'PROGUARD'
           -keep class org.mozilla.geckoview.** { *; }
+          -keep class com.personal.javageckobrowser.NativeBridge { *; }
+          -keepclasseswithmembernames class * { native <methods>; }
           PROGUARD
 
       - name: Setup Gradle
@@ -1188,7 +1454,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: JavaGeckoBrowser-debug-apk
-          path: JavaGeckoBrowser/app/build/outputs/apk/debug/app-debug.apk
+          path: JavaGeckoBrowser/app/build/outputs/apk/debug/
           retention-days: 30
 
       - name: Build Java Gecko Browser Release APK (unsigned)
@@ -1199,5 +1465,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: JavaGeckoBrowser-release-unsigned-apk
-          path: JavaGeckoBrowser/app/build/outputs/apk/release/app-release-unsigned.apk
+          path: JavaGeckoBrowser/app/build/outputs/apk/release/
           retention-days: 30
