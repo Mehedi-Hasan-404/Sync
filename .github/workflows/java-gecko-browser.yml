@@ -281,8 +281,7 @@ jobs:
 
                   session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
                       @Override
-                      public void onLocationChange(@NonNull GeckoSession session, String url,
-                              @NonNull List<GeckoSession.PermissionDelegate.ContentPermission> perms) {
+                      public void onLocationChange(@NonNull GeckoSession session, String url) {
                           runOnUiThread(() -> urlBar.setText(url));
                           if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).setUrl(url != null ? url : "");
                       }
