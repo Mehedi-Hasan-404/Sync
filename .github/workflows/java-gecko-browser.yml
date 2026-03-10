@@ -28,7 +28,7 @@ jobs:
             SDKMANAGER="${ANDROID_HOME}/cmdline-tools/$(ls ${ANDROID_HOME}/cmdline-tools | sort -V | tail -1)/bin/sdkmanager"
           fi
           yes | "$SDKMANAGER" --licenses || true
-          "$SDKMANAGER" "build-tools;36.0.0" "platforms;android-36" "ndk;27.2.12479018" "cmake;3.22.1"
+          "$SDKMANAGER" "build-tools;35.0.0" "platforms;android-35" "ndk;27.2.12479018" "cmake;3.22.1"
 
       - name: Create Java Gecko Browser project structure
         run: |
@@ -43,25 +43,32 @@ jobs:
                   mavenCentral()
               }
               dependencies {
-                  classpath 'com.android.tools.build:gradle:8.9.1'
+                  classpath 'com.android.tools.build:gradle:8.7.3'
               }
           }
 
-          allprojects {
+          task clean(type: Delete) {
+              delete rootProject.buildDir
+          }
+          GRADLE
+
+          # settings.gradle
+          cat > settings.gradle << 'SETTINGS'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories {
                   google()
                   mavenCentral()
                   maven { url 'https://maven.mozilla.org/maven2' }
               }
           }
-
-          task clean(type: Delete) {
-              delete layout.buildDirectory
-          }
-          GRADLE
-
-          # settings.gradle
-          cat > settings.gradle << 'SETTINGS'
           rootProject.name = "JavaGeckoBrowser"
           include ':app'
           SETTINGS
@@ -100,12 +107,12 @@ jobs:
 
           android {
               namespace 'com.personal.javageckobrowser'
-              compileSdk 36
+              compileSdk 35
 
               defaultConfig {
                   applicationId 'com.personal.javageckobrowser'
                   minSdk 26
-                  targetSdk 36
+                  targetSdk 35
                   versionCode 1
                   versionName '1.0'
                   ndk {
@@ -153,7 +160,7 @@ jobs:
           }
 
           dependencies {
-              implementation 'org.mozilla.geckoview:geckoview:145.0.20251124145406'
+              implementation 'org.mozilla.geckoview:geckoview-android:128.3.0'
               implementation 'androidx.core:core:1.12.0'
               implementation 'androidx.appcompat:appcompat:1.6.1'
               implementation 'com.google.android.material:material:1.11.0'
@@ -230,7 +237,6 @@ jobs:
           import androidx.recyclerview.widget.RecyclerView;
 
           import org.mozilla.geckoview.GeckoRuntime;
-          import org.mozilla.geckoview.GeckoRuntimeSettings;
           import org.mozilla.geckoview.GeckoSession;
           import org.mozilla.geckoview.GeckoView;
 
@@ -258,12 +264,7 @@ jobs:
                   setContentView(R.layout.activity_main);
 
                   if (AppRuntime.runtime == null) {
-                      GeckoRuntimeSettings runtimeSettings = new GeckoRuntimeSettings.Builder()
-                          .userAgent(
-                              "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
-                              "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0")
-                          .build();
-                      AppRuntime.runtime = GeckoRuntime.create(this, runtimeSettings);
+                      AppRuntime.runtime = GeckoRuntime.create(this);
                   }
                   runtime      = AppRuntime.runtime;
 
@@ -367,8 +368,13 @@ jobs:
                   tabCountText.setText(String.valueOf(Math.min(tabs.size(), 99)));
               }
 
+              private static final String GECKO_UA =
+                  "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
+                  "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0";
+
               private void openNewTab(String url) {
                   GeckoSession session = new GeckoSession();
+                  session.getSettings().setUserAgentOverride(GECKO_UA);
                   session.setProgressDelegate(new GeckoSession.ProgressDelegate() {
                       @Override
                       public void onPageStart(@NonNull GeckoSession session, @NonNull String url) {
@@ -582,10 +588,9 @@ jobs:
 
           import androidx.appcompat.app.AlertDialog;
           import androidx.appcompat.app.AppCompatActivity;
-          import androidx.recyclerview.widget.LinearLayoutManager;
-          import androidx.recyclerview.widget.RecyclerView;
 
           import org.mozilla.geckoview.GeckoRuntime;
+          import org.mozilla.geckoview.WebExtension;
 
           import java.io.File;
           import java.io.FileOutputStream;
@@ -804,24 +809,6 @@ jobs:
           </vector>
           DRAWLOCK
 
-          cat > app/src/main/res/drawable/url_bar_bg.xml << 'URLBARBG'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"
-              android:shape="rectangle">
-              <corners android:radius="24dp"/>
-              <solid android:color="#3C4043"/>
-          </shape>
-          URLBARBG
-
-          cat > app/src/main/res/drawable/tab_item_bg.xml << 'TABITEMBG'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"
-              android:shape="rectangle">
-              <corners android:topLeftRadius="8dp" android:topRightRadius="8dp"/>
-              <solid android:color="#3C4043"/>
-          </shape>
-          TABITEMBG
-
           cat > app/src/main/res/drawable/popup_bg.xml << 'POPUPBG'
           <?xml version="1.0" encoding="utf-8"?>
           <shape xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1030,6 +1017,14 @@ jobs:
           </LinearLayout>
           TABXML
 
+          cat > app/src/main/res/drawable/favicon_dot.xml << 'DRAWFAV'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="oval">
+              <solid android:color="#5F6368"/>
+          </shape>
+          DRAWFAV
+
           cat > app/src/main/res/drawable/ic_close.xml << 'DRAWCLOSE'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
               android:width="24dp" android:height="24dp"
@@ -1038,14 +1033,6 @@ jobs:
                   android:pathData="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z"/>
           </vector>
           DRAWCLOSE
-
-          cat > app/src/main/res/drawable/favicon_dot.xml << 'DRAWFAV'
-          <?xml version="1.0" encoding="utf-8"?>
-          <shape xmlns:android="http://schemas.android.com/apk/res/android"
-              android:shape="oval">
-              <solid android:color="#5F6368"/>
-          </shape>
-          DRAWFAV
 
           cat > app/src/main/res/drawable/url_bar_bg.xml << 'URLBARBG2'
           <?xml version="1.0" encoding="utf-8"?>
@@ -1436,14 +1423,14 @@ jobs:
           PROGUARD
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.13'
+          gradle-version: '8.11.1'
 
       - name: Generate Gradle wrapper
         working-directory: JavaGeckoBrowser
         run: |
-          gradle wrapper --gradle-version=8.13
+          gradle wrapper --gradle-version=8.11.1
           chmod +x gradlew
 
       - name: Build Java Gecko Browser Debug APK
