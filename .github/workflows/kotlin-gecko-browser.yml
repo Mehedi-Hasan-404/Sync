@@ -88,35 +88,12 @@ jobs:
           mkdir -p app/src/main/res/mipmap-xxhdpi
           mkdir -p app/src/main/res/mipmap-xxxhdpi
 
-          # Generate launcher icons (solid blue circle PNG) for each density
-          python3 - << 'ICONGEN'
-import struct, zlib, os
-
-def make_png(size):
-    def chunk(name, data):
-        c = struct.pack('>I', len(data)) + name + data
-        return c + struct.pack('>I', zlib.crc32(c[4:]) & 0xffffffff)
-    ihdr = struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0)
-    rows = []
-    for y in range(size):
-        row = b'\x00'
-        for x in range(size):
-            cx, cy = x - size/2, y - size/2
-            if cx*cx + cy*cy <= (size/2 - 2)**2:
-                row += bytes([30, 120, 220])  # blue
-            else:
-                row += bytes([240, 240, 240])  # light grey bg
-        rows.append(row)
-    idat = zlib.compress(b''.join(rows))
-    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', ihdr) + chunk(b'IDAT', idat) + chunk(b'IEND', b'')
-
-densities = {'mipmap-mdpi':48,'mipmap-hdpi':72,'mipmap-xhdpi':96,'mipmap-xxhdpi':144,'mipmap-xxxhdpi':192}
-for d, s in densities.items():
-    path = f'app/src/main/res/{d}/ic_launcher.png'
-    with open(path, 'wb') as f:
-        f.write(make_png(s))
-    print(f'Created {path} ({s}x{s})')
-ICONGEN
+          # Generate launcher icons via base64-encoded PNGs (blue circle, each density)
+          echo "iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAIAAADYYG7QAAAAuElEQVR4nO3ZyQ3AIAwEwFSSOlNsikgJyQshwrGA8YFs8faO+LEcj7I5pAHpkIHO6ybZMwj64pGzHAQ6ZmQoaJjSy4JAJBrQ1AYRahBTDUROQVhF0FJNxWQExKApmTIgNk3WlIKYNX+TbpCIJjE5CAcJamKTgxy0K0hcE0xab8hBDtoRJGsKBgd1gaRMMUA9iN+UpFt4ubKZsrl2QKtNpVBTDdoKUzPLZgs7z8IjjDf5dSLJHnW/QS/SgDb6tJSVWwAAAABJRU5ErkJggg==" | base64 -d > app/src/main/res/mipmap-mdpi/ic_launcher.png
+          echo "iVBORw0KGgoAAAANSUhEUgAAAEgAAABICAIAAADajyQQAAABGklEQVR4nO3b0Q0CIRCE4avEOi3WIixBk0uMUThgGRiWHTLv/l/uUTiem56DHTDqTIXd7o9pvzUE9ga0Dt6AhBk844QYGISE5XXB4B6g0A6boOqxWWDTSD28ZhhFZbC1wYiqVlstjE5q5VXB6BKDrQyjG2y2qDB6vdl2BaN399iyMHpxpy0YjN7ab0vA6JUQm2DLrwCj96FsMWD0MqBNMCdLwOhNWJtgfiaYtwnmbTFg9Bq4bfcvJpiDCeZtgnlbGNgeto9FMCdLw7zbviFhYH5tPwrBll8Z5tH2Twj2H/TOMC+2XHzImzmL266zA8PWtBWbY98wXYdXn6pb3Gxba6ReSpBs5ja9Rqo4i5DOoxd/iDMCkDvbvqp9AbVbmh6Hc1tzAAAAAElFTkSuQmCC" | base64 -d > app/src/main/res/mipmap-hdpi/ic_launcher.png
+          echo "iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAIAAABt+uBvAAABi0lEQVR4nO3dwXHDQAxDUVfiOl1sinAJ8dVyImq5S4CWPoYFEG90Fff2JLu5uRfonnZA98ePe4W3eIBeCrnRr6oDSqN4scqBlruIpQqBBDQCphIgMU0p02IgI00R0zIgO0oR0xogu0Wd0SyQnaCaaQrI3lxglAeyd9YYJYHsbWVGw0D2kmKmMSB7N70RQOuA7K0sRkeB7H1cRoeA7E2MRjGQvYPXCKA5IPv2dqM9IPveHYwAygLZN25iBFAKyL5rHyOAxoHsW7YyAmgQyL5fhwEIoCIg+2Z9BiCAAFID2XfqNgABBBBAADUegAACSAdk36bn8AUFOgABBBBAAHUdgAACSAqE0acOQAABJAXCaKMDEEDLgTDaaAA0DnRlo08KgFJA1zT60wGgLNDVjP5DAGgC6DpGOwL8s8pPvdVA5zYKu3N5YRHQ+YwOtub6C0BKoHMYDfXlhlkN0Dca5WpyR7ES6FuMZgpyyzUI14CDcE86CBfJg3DTPgivIgThXY0gvMwShLd9grQD6pZfnp/iMs2dU8YAAAAASUVORK5CYII=" | base64 -d > app/src/main/res/mipmap-xhdpi/ic_launcher.png
+          echo "iVBORw0KGgoAAAANSUhEUgAAAJAAAACQCAIAAABoJHXvAAAC7ElEQVR4nO3UgY0bMQxE0askdabYFMESEkCA4di+s3eX1HCkP/gFrPhgfwWz2pf6A9ixLQv26/cf9SeUzBXsn8f11I84MxuwFKEF/FqDTUCyw+sIJnTqL9cLTM7Tn60FmNzDSE4MJgewY5OByY9uyiYAkx/amm0qmPy4C7DNA5PfdA2zGWDyU67EVg4mv+BiZoVg8sMtyVYFJr9XhyoOWwImv1Sf0m+bDya/Ubdyz5sMJr9OzxIvnAkmv0vnso6cBia/SP9S7pwDJr+FS9dPnQAmv4JXYjD5+x2Tgclf7psATP5m96aCyV+7RpPA5O9cqXIw+QvXCzCzCsHkb1u1EjD5q9YOMLOSweTv2aE0MPlL9gkwsxLA5G/YLcDMugQm//o9A8ysk2Dy7945wMw6DCb/YgLMLMDMOgAm/1YaAWbWR2Dyr6T7ADMLMLPegMm/j54DzCzAzALMrG/B5F9G3wWYWYCZBZhZgJn1Akz+TfRzgJkFmFmAmQWYWYCZBZhZgJkFmFmAmQWYWf+Byb+GPolfmFP8JZoFmFmAmQWYWYCZBZhZgJkFmFmAmQWYWY9gmHXuZgSYR4CZBZhZgJn1Ggyznt0DAWYQYGYBZtZPYJh160EHsO4BZtZ7MMz69EwDWOs+BcOsQy9dAOsbYGYdA8OsoRZgfTsDhlk3LcCadh4Ms1ZagHXsKhhmfbQAa1cOGGZNtA6AYdZBC7BG5YNhJtc6DIaZVguwFtWCYSbUOgmGmUrrPBhmEq1LYJjN17oKhtlkrQQwzGZq5YBhNk0rssACsylakQgWmNVrRS5YYFasFelggVmlVlSABWZlWlEEFpjVaEUdWGxvVnTVQrAx+eGWoRorB4vNzKqPOQNsTH5Kd6qxeWCxtNm0G04FG5Mf15RqTAA2Jj+0HdWYDGxMfnQjqjEx2JgcwIJqrAXYbXKPtk639QIbk/P0pBrrCHYbTs9rDXa/nZHuZwP2sH2EHuYK9namHm+3LNiq+wstrL66G53QaQAAAABJRU5ErkJggg==" | base64 -d > app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+          echo "iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAAEgElEQVR4nO3VgXHbMBBE0VSSOlNsikAJSQYemZEoiuQesAfg3/wCROwb+0fhOOF+uH8AN/YB6MP9/PXb/RNS37qA/sqIzf1BnlsFUDgXSNWbGZAFzWqYZgNkh7IapkkA2U0sK2lsQHYBSBoVkH1yGNUbD5B9ZhhtbxhA9l2RtHsDALIPCaODSw3IPl6e3FO8vbyA7Jtlyz3I/mUEZJ8qc+5xni8XIPs8o+Qe6vsSAbKvMlbuub4uBSD7GOPmni4BIPsGo+edzwnI/vQz5RrRBsj+4vNl2dEDyP7Ws9Z/yt6A7E+8Qj0H7QrI/rLr1G3TfoDsb7pafWbtBMj+mmvWYdkegOzvuHKtx20OyP6C1HTftoDsb0e1dhM3BGR/NdrWaOVWgOzvRa+1GLoJIPtL0bvCt44HZH8jOi527mBA9tehMwUuHgnI/i50vqjRwwDZX4SuFrJ7DCD7W9C99OkBtHT69AGA7K9ASmZA9u8nPRsg+5dTVAAiKQMg+zdTbF0B2b+WWgQgkuoEyP6d1K7mgOxfSK0DEEk1BGT/NuoTgEiqCSD7V1HPggHZv4f6ByCSCgNk/xJyBSCSCgBk/wbyBiCSAhBJSYDsv54yBCCSugnI/rspTwAiqcuA7L+YsgUgkgIQSV0AZP+tlDMAkRSASOoUIPuvpMwBiKQARFIAIqkPgOy/j/IHIJICEEkBiKTeArL/MholAJEUgEgKQCQFIJICEEntALL/JhorAJEUgEgKQCQFIJICEEkBiKQARFIAIikAkRSASApAJAUgkvoPkP3X0IjxF4jux78wkgIQSQGIpABEUgAiKQCRFIBICkAkBSCSAhBJAYikAERSz4AwROd7mAEQ3QlAJAUgkgIQSQGIpPYBYYjOtAUDILocgEgKQCR1BAhDdNyTFgDRtQBEUgAiqc+AMETveqUCILoQgEjqLCAM0Wu7TgBEZwMQSV0DhCHa9g4JgOhUdwBhiGoHQgBEn7sPCEN0zANA9CEAkZQKCEMr99EGgOioGEAYWrMzMABEb4sEhKHVOqniAiAMrdN5EgCinVoBwtAKXfIAIHquLSAMzd1VDHcAYWjWbkgAEH3XDxCG5useg/uAMDRTtw0AiP7lAYShOVIAqIAwNHri+gGAMDRu+vQAWjp9+hhABUMDFrJ7GKCCoaGKGj0SUMHQIAUuHgyoYCh9sXPHAyoYSlz41k0AFQylrMXQrQAVDCWr0coNARUMpandxG0BFQwlqOm+zQEVDM2rp/QBVDA0qZ7SDVDB0Ix6Sk9ABUPT6SmdARUMzaWn9AdUz/7Es9Z/Sg+ggqEp9BQjoIKh8fUUL6B69qcfPe98fkAFQ8PqKUkA1bOPMVbuub4uEaCCodH0lGyA6tnnyZx7nOfLCKiefapsuQfZv7yACobS6ynJAdWzjwedgxsAUD37kNDZvWEAPc6+K262Nx6gevaZoVNvVED17JOvTKfe2IAeZxewmpvHTQLocXYTi7h53GyAtmeHMiua7c0MaHugaXSrAHo9uITcuoBO3rIyTh6AOOn+APUR+EO3IvmKAAAAAElFTkSuQmCC" | base64 -d > app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
 
           # app/build.gradle.kts
           cat > app/build.gradle.kts << 'APPGRADLE'
