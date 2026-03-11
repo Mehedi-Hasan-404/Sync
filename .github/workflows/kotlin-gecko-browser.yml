@@ -309,9 +309,14 @@ jobs:
                       // Auto-approve installs and updates
                       appRuntime!!.webExtensionController.promptDelegate =
                           object : WebExtensionController.PromptDelegate {
-                              override fun onInstallPrompt(
-                                  extension: WebExtension
-                              ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                              override fun onInstallPromptRequest(
+                                  extension: WebExtension,
+                                  permissions: Array<out String>,
+                                  origins: Array<out String>,
+                                  dataCollectionPermissions: Array<out String>
+                              ): GeckoResult<WebExtension.PermissionPromptResponse> =
+                                  GeckoResult.fromValue(
+                                      WebExtension.PermissionPromptResponse(true, true, false))
                               override fun onUpdatePrompt(
                                   current: WebExtension,
                                   updated: WebExtension,
