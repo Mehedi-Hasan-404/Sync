@@ -310,52 +310,16 @@ jobs:
                       appRuntime!!.webExtensionController.promptDelegate =
                           object : WebExtensionController.PromptDelegate {
                               override fun onInstallPrompt(
-                                  extension: WebExtension,
-                                  response: WebExtensionController.PromptDelegate.InstallPromptResponse
-                              ) { response.confirm() }
+                                  extension: WebExtension
+                              ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(AllowOrDeny.ALLOW)
                               override fun onUpdatePrompt(
                                   current: WebExtension,
                                   updated: WebExtension,
                                   newPermissions: Array<out String>,
-                                  newOrigins: Array<out String>,
-                                  response: WebExtensionController.PromptDelegate.UpdatePromptResponse
-                              ) { response.confirm() }
+                                  newOrigins: Array<out String>
+                              ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(AllowOrDeny.ALLOW)
                           }
 
-                      // TabDelegate — lets extensions open/close/update tabs
-                      appRuntime!!.webExtensionController.setTabDelegate(
-                          object : WebExtensionController.TabDelegate {
-                              override fun onNewTab(
-                                  source: WebExtension?, details: WebExtension.CreateTabDetails
-                              ): GeckoResult<GeckoSession> {
-                                  val newSession = GeckoSession()
-                                  runOnUiThread { addExtensionTab(newSession, details.url ?: "about:blank") }
-                                  return GeckoResult.fromValue(newSession)
-                              }
-                              override fun onCloseTab(
-                                  source: WebExtension?, session: GeckoSession
-                              ): GeckoResult<AllowOrDeny> {
-                                  runOnUiThread {
-                                      val idx = tabs.indexOfFirst { it.session === session }
-                                      if (idx >= 0) closeTab(idx)
-                                  }
-                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW)
-                              }
-                              override fun onUpdateTab(
-                                  source: WebExtension?, session: GeckoSession,
-                                  details: WebExtension.UpdateTabDetails
-                              ): GeckoResult<AllowOrDeny> {
-                                  runOnUiThread {
-                                      val idx = tabs.indexOfFirst { it.session === session }
-                                      if (idx >= 0 && details.url != null) {
-                                          tabs[idx].session.loadUri(details.url!!)
-                                          if (details.active == true) switchToTab(idx)
-                                      }
-                                  }
-                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW)
-                              }
-                          }
-                      )
                   }
                   runtime = appRuntime!!
 
@@ -578,7 +542,9 @@ jobs:
                   }
 
                   session.navigationDelegate = object : NavigationDelegate {
-                      override fun onLocationChange(session: GeckoSession, url: String?, hasUserGesture: Boolean) {
+                      override fun onLocationChange(session: GeckoSession, url: String?,
+                              perms: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
+                              hasUserGesture: Boolean) {
                           runOnUiThread {
                               val idx = tabs.indexOfFirst { it.session === session }
                               if (idx >= 0) tabs[idx].url = url ?: ""
@@ -862,9 +828,9 @@ jobs:
               private fun toggleExtension(ext: WebExtension, enable: Boolean) {
                   val rt = MainActivity.appRuntime ?: return
                   val op = if (enable)
-                      rt.webExtensionController.enable(ext, WebExtension.Flags.NONE)
+                      rt.webExtensionController.enable(ext, WebExtension.Flags.NONE.toInt())
                   else
-                      rt.webExtensionController.disable(ext, WebExtension.Flags.NONE)
+                      rt.webExtensionController.disable(ext, WebExtension.Flags.NONE.toInt())
                   op.accept({ updated ->
                       runOnUiThread {
                           val idx = installedExtensions.indexOfFirst { it.id == ext.id }
