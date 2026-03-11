@@ -112,9 +112,6 @@ jobs:
                   targetSdk = 35
                   versionCode = 1
                   versionName = "1.0"
-                  ndk {
-                      abiFilters += listOf("arm64-v8a")
-                  }
                   externalNativeBuild {
                       cmake {
                           cppFlags("-std=c++17 -O2")
@@ -305,10 +302,11 @@ jobs:
                   }
                   urlBar.setOnEditorActionListener { _, actionId, _ ->
                       if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
-                          loadUrl(urlBar.text.toString())
-                          urlBar.clearFocus()
+                          val input = urlBar.text.toString()
                           val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
                           imm.hideSoftInputFromWindow(urlBar.windowToken, 0)
+                          urlBar.clearFocus()
+                          loadUrl(input)
                           true
                       } else false
                   }
