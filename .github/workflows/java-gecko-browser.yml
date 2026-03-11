@@ -323,50 +323,13 @@ jobs:
                       AppRuntime.runtime.getWebExtensionController().setPromptDelegate(
                           new WebExtensionController.PromptDelegate() {
                               @Override
-                              public void onInstallPrompt(WebExtension extension,
-                                      WebExtensionController.PromptDelegate.InstallPromptResponse response) {
-                                  response.confirm();
-                              }
-                              @Override
-                              public void onUpdatePrompt(WebExtension current, WebExtension updated,
-                                      String[] newPermissions, String[] newOrigins,
-                                      WebExtensionController.PromptDelegate.UpdatePromptResponse response) {
-                                  response.confirm();
-                              }
-                          }
-                      );
-
-                      // TabDelegate — allows extensions to open, close and update tabs
-                      AppRuntime.runtime.getWebExtensionController().setTabDelegate(
-                          new WebExtensionController.TabDelegate() {
-                              @Override
-                              public GeckoResult<GeckoSession> onNewTab(
-                                      WebExtension source, WebExtension.CreateTabDetails details) {
-                                  GeckoSession newSession = new GeckoSession();
-                                  String url = details.url != null ? details.url : "about:blank";
-                                  runOnUiThread(() -> addExtensionTab(newSession, url));
-                                  return GeckoResult.fromValue(newSession);
-                              }
-                              @Override
-                              public GeckoResult<AllowOrDeny> onCloseTab(
-                                      WebExtension source, GeckoSession session) {
-                                  runOnUiThread(() -> {
-                                      int idx = indexOfSession(session);
-                                      if (idx >= 0) closeTab(idx);
-                                  });
+                              public GeckoResult<AllowOrDeny> onInstallPrompt(WebExtension extension) {
                                   return GeckoResult.fromValue(AllowOrDeny.ALLOW);
                               }
                               @Override
-                              public GeckoResult<AllowOrDeny> onUpdateTab(
-                                      WebExtension source, GeckoSession session,
-                                      WebExtension.UpdateTabDetails details) {
-                                  runOnUiThread(() -> {
-                                      int idx = indexOfSession(session);
-                                      if (idx >= 0 && details.url != null) {
-                                          tabs.get(idx).getSession().loadUri(details.url);
-                                          if (Boolean.TRUE.equals(details.active)) switchToTab(idx);
-                                      }
-                                  });
+                              public GeckoResult<AllowOrDeny> onUpdatePrompt(
+                                      WebExtension current, WebExtension updated,
+                                      String[] newPermissions, String[] newOrigins) {
                                   return GeckoResult.fromValue(AllowOrDeny.ALLOW);
                               }
                           }
@@ -606,7 +569,9 @@ jobs:
 
                   session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
                       @Override
-                      public void onLocationChange(@NonNull GeckoSession s, String u, boolean hasUserGesture) {
+                      public void onLocationChange(@NonNull GeckoSession s, String u,
+                              @NonNull java.util.List<GeckoSession.PermissionDelegate.ContentPermission> perms,
+                              @NonNull Boolean hasUserGesture) {
                           runOnUiThread(() -> {
                               int idx = indexOfSession(s);
                               if (idx >= 0) tabs.get(idx).setUrl(u != null ? u : "");
@@ -921,10 +886,15 @@ jobs:
           import android.net.Uri;
           import android.os.Bundle;
           import android.provider.OpenableColumns;
+          import android.view.LayoutInflater;
+          import android.view.View;
+          import android.view.ViewGroup;
           import android.widget.*;
 
           import androidx.appcompat.app.AlertDialog;
           import androidx.appcompat.app.AppCompatActivity;
+          import androidx.recyclerview.widget.LinearLayoutManager;
+          import androidx.recyclerview.widget.RecyclerView;
 
           import org.mozilla.geckoview.GeckoRuntime;
           import org.mozilla.geckoview.WebExtension;
@@ -986,8 +956,8 @@ jobs:
                   GeckoRuntime rt = AppRuntime.runtime;
                   if (rt == null) return;
                   GeckoResult<WebExtension> op = enable
-                      ? rt.getWebExtensionController().enable(ext, WebExtension.Flags.NONE)
-                      : rt.getWebExtensionController().disable(ext, WebExtension.Flags.NONE);
+                      ? rt.getWebExtensionController().enable(ext, (int) WebExtension.Flags.NONE)
+                      : rt.getWebExtensionController().disable(ext, (int) WebExtension.Flags.NONE);
                   op.accept(updated -> runOnUiThread(() -> {
                       int idx = indexOfExt(ext.id);
                       if (idx >= 0 && updated != null) {
