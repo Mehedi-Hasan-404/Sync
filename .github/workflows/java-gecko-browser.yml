@@ -329,7 +329,7 @@ jobs:
                                       @NonNull String[] permissions,
                                       @NonNull String[] origins) {
                                   return GeckoResult.fromValue(
-                                      new WebExtension.PermissionPromptResponse(true, true, false));
+                                      new WebExtension.PermissionPromptResponse(true, true));
                               }
                               @Override
                               public GeckoResult<AllowOrDeny> onUpdatePrompt(
