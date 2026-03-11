@@ -267,6 +267,7 @@ jobs:
           import android.widget.Toast;
 
           import androidx.annotation.NonNull;
+          import androidx.annotation.NonNull;
           import androidx.appcompat.app.AlertDialog;
           import androidx.appcompat.app.AppCompatActivity;
           import androidx.recyclerview.widget.LinearLayoutManager;
@@ -323,13 +324,20 @@ jobs:
                       AppRuntime.runtime.getWebExtensionController().setPromptDelegate(
                           new WebExtensionController.PromptDelegate() {
                               @Override
-                              public GeckoResult<AllowOrDeny> onInstallPrompt(WebExtension extension) {
-                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+                              public GeckoResult<WebExtension.PermissionPromptResponse> onInstallPromptRequest(
+                                      @NonNull WebExtension extension,
+                                      @NonNull String[] permissions,
+                                      @NonNull String[] origins,
+                                      @NonNull String[] dataCollectionPermissions) {
+                                  return GeckoResult.fromValue(
+                                      new WebExtension.PermissionPromptResponse(true, true, false));
                               }
                               @Override
                               public GeckoResult<AllowOrDeny> onUpdatePrompt(
-                                      WebExtension current, WebExtension updated,
-                                      String[] newPermissions, String[] newOrigins) {
+                                      @NonNull WebExtension current,
+                                      @NonNull WebExtension updated,
+                                      @NonNull String[] newPermissions,
+                                      @NonNull String[] newOrigins) {
                                   return GeckoResult.fromValue(AllowOrDeny.ALLOW);
                               }
                           }
@@ -896,6 +904,7 @@ jobs:
           import androidx.recyclerview.widget.LinearLayoutManager;
           import androidx.recyclerview.widget.RecyclerView;
 
+          import org.mozilla.geckoview.GeckoResult;
           import org.mozilla.geckoview.GeckoRuntime;
           import org.mozilla.geckoview.WebExtension;
 
