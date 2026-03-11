@@ -254,22 +254,31 @@ jobs:
           cat > app/src/main/java/com/personal/javageckobrowser/MainActivity.java << 'MAINJAVA'
           package com.personal.javageckobrowser;
 
+          import android.animation.ValueAnimator;
           import android.content.Intent;
           import android.net.Uri;
           import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.text.TextUtils;
+          import android.view.KeyEvent;
+          import android.view.MotionEvent;
           import android.view.View;
+          import android.view.ViewGroup;
+          import android.view.animation.DecelerateInterpolator;
           import android.view.inputmethod.EditorInfo;
+          import android.view.inputmethod.InputMethodManager;
+          import android.widget.EditText;
           import android.widget.FrameLayout;
           import android.widget.ImageButton;
           import android.widget.ImageView;
+          import android.widget.LinearLayout;
           import android.widget.PopupMenu;
           import android.widget.TextView;
           import android.widget.Toast;
 
           import androidx.annotation.NonNull;
-          import androidx.annotation.NonNull;
           import androidx.appcompat.app.AlertDialog;
-          import androidx.appcompat.app.AppCompatActivity;
           import androidx.recyclerview.widget.LinearLayoutManager;
           import androidx.recyclerview.widget.RecyclerView;
 
@@ -282,14 +291,13 @@ jobs:
           import org.mozilla.geckoview.GeckoView;
           import org.mozilla.geckoview.WebExtension;
           import org.mozilla.geckoview.WebExtensionController;
-          import org.mozilla.geckoview.GeckoView;
 
           import java.util.ArrayList;
           import java.util.List;
-          import android.widget.EditText;
 
           public class MainActivity extends BaseActivity {
 
+              // ── UI refs ─────────────────────────────────────────────────────
               private GeckoRuntime runtime;
               private GeckoView geckoView;
               private EditText urlBar;
@@ -297,30 +305,42 @@ jobs:
               private RecyclerView tabsRecycler;
               private TabAdapter tabAdapter;
               private TextView tabCountText;
-              private ImageButton btnBack;
-              private ImageButton btnForward;
+              private ImageButton btnBack, btnForward;
               private android.widget.ProgressBar progressBar;
+              private LinearLayout bottomChrome;
+              private View findBar;
+              private EditText findInput;
+
+              // ── State ────────────────────────────────────────────────────────
               private boolean isDesktopMode = false;
-              private static final String MOBILE_UA =
-                  "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
-                  "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0";
-              private static final String DESKTOP_UA =
-                  "Mozilla/5.0 (X11; Linux x86_64; rv:137.0) Gecko/20100101 Firefox/137.0";
+              private final Handler mainHandler = new Handler(Looper.getMainLooper());
               private final List<BrowserTab> tabs = new ArrayList<>();
               private int currentTabIndex = 0;
 
+              // ── User-agents ──────────────────────────────────────────────────
+              private static final String MOBILE_UA =
+                  "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
+                  "; Mobile; rv:136.0) Gecko/136.0 Firefox/136.0";
+              private static final String DESKTOP_UA =
+                  "Mozilla/5.0 (X11; Linux x86_64; rv:136.0) Gecko/20100101 Firefox/136.0";
+
+              // ════════════════════════════════════════════════════════════════
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_main);
 
+                  // ── GeckoRuntime (singleton) ──
                   if (AppRuntime.runtime == null) {
-                      GeckoRuntimeSettings settings = new GeckoRuntimeSettings.Builder()
+                      GeckoRuntimeSettings runtimeSettings = new GeckoRuntimeSettings.Builder()
                           .extensionsProcessEnabled(true)
+                          .javaScriptEnabled(true)
+                          .remoteDebuggingEnabled(false)
+                          .consoleServiceToLogcat(false)
                           .build();
-                      AppRuntime.runtime = GeckoRuntime.create(this, settings);
+                      AppRuntime.runtime = GeckoRuntime.create(this, runtimeSettings);
 
-                      // Auto-approve all install and update prompts
+                      // Auto-approve extension install/update prompts on the main thread handler
                       AppRuntime.runtime.getWebExtensionController().setPromptDelegate(
                           new WebExtensionController.PromptDelegate() {
                               @Override
@@ -344,20 +364,14 @@ jobs:
                   }
                   runtime = AppRuntime.runtime;
 
-                  // Re-enable all previously installed extensions on startup
+                  // Re-enable all previously installed extensions
                   runtime.getWebExtensionController().list().accept(extensions -> {
                       if (extensions != null) {
                           for (WebExtension ext : extensions) enableExtensionOnAllSessions(ext);
                       }
                   });
 
-                  // Install native crash handler and log ABI info
-                  String crashLog = getFilesDir().getAbsolutePath() + "/crash.log";
-                  NativeBridge.installCrashHandler(crashLog);
-                  android.util.Log.i("Browser", "ABI=" + NativeBridge.getAbi()
-                      + " RAM=" + NativeBridge.getAvailableRamMb() + "MB"
-                      + " kernel=" + NativeBridge.getKernelVersion());
-
+                  // ── Bind views ──
                   geckoView    = findViewById(R.id.gecko_view);
                   urlBar       = findViewById(R.id.url_bar);
                   lockIcon     = findViewById(R.id.lock_icon);
@@ -366,23 +380,31 @@ jobs:
                   btnBack      = findViewById(R.id.btn_back);
                   btnForward   = findViewById(R.id.btn_forward);
                   progressBar  = findViewById(R.id.progress_bar);
-
+                  bottomChrome = findViewById(R.id.bottom_chrome);
+                  findBar      = findViewById(R.id.find_bar);
+                  findInput    = findViewById(R.id.find_input);
 
                   setupTabs();
                   setupUrlBar();
                   setupButtons();
+                  setupFindBar();
+                  setupGeckoScrollHide();
                   openNewTab("about:home");
               }
 
+              // ── Tab strip setup ──────────────────────────────────────────────
               private void setupTabs() {
                   tabAdapter = new TabAdapter(tabs, this::switchToTab, this::closeTab);
-                  tabsRecycler.setLayoutManager(new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
+                  tabsRecycler.setLayoutManager(
+                      new LinearLayoutManager(this, LinearLayoutManager.HORIZONTAL, false));
                   tabsRecycler.setAdapter(tabAdapter);
               }
 
+              // ── URL bar ──────────────────────────────────────────────────────
               private void setupUrlBar() {
                   urlBar.setOnFocusChangeListener((v, hasFocus) -> {
                       if (hasFocus) {
+                          // Show full URL when focused
                           if (currentTabIndex < tabs.size())
                               urlBar.setText(tabs.get(currentTabIndex).getUrl());
                           urlBar.selectAll();
@@ -391,173 +413,149 @@ jobs:
                               showDisplayUrl(tabs.get(currentTabIndex).getUrl());
                       }
                   });
+
                   urlBar.setOnEditorActionListener((v, actionId, event) -> {
-                      if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
-                          String input = urlBar.getText().toString();
-                          android.view.inputmethod.InputMethodManager imm =
-                              (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
-                          if (imm != null) imm.hideSoftInputFromWindow(urlBar.getWindowToken(), 0);
-                          urlBar.clearFocus();
-                          loadUrl(input);
+                      if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE ||
+                          (event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                          String input = urlBar.getText().toString().trim();
+                          if (!input.isEmpty()) {
+                              dismissKeyboard(urlBar);
+                              urlBar.clearFocus();
+                              hideHomePage();
+                              loadUrl(input);
+                          }
+                          return true;
+                      }
+                      return false;
+                  });
+
+                  // Tap on url bar while not focused → select all
+                  urlBar.setOnTouchListener((v, event) -> {
+                      if (!urlBar.hasFocus() && event.getAction() == MotionEvent.ACTION_UP) {
+                          urlBar.requestFocus();
+                          urlBar.selectAll();
+                          showKeyboard(urlBar);
                           return true;
                       }
                       return false;
                   });
               }
 
-              private void showDisplayUrl(String url) {
-                  if (url == null || url.isEmpty()) { urlBar.setText(""); return; }
-                  String display = url;
-                  try {
-                      android.net.Uri uri = android.net.Uri.parse(url);
-                      String host = uri.getHost();
-                      if (host != null) {
-                          lockIcon.setVisibility(url.startsWith("https://") ? View.VISIBLE : View.GONE);
-                          display = host.replaceFirst("^www\\.", "");
-                      }
-                  } catch (Exception ignored) {}
-                  urlBar.setText(display);
-              }
-
+              // ── Bottom bar buttons ────────────────────────────────────────────
               private void setupButtons() {
                   btnBack.setOnClickListener(v -> {
-                      if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).getSession().goBack();
+                      if (currentTabIndex < tabs.size())
+                          tabs.get(currentTabIndex).getSession().goBack();
                   });
                   btnForward.setOnClickListener(v -> {
-                      if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).getSession().goForward();
+                      if (currentTabIndex < tabs.size())
+                          tabs.get(currentTabIndex).getSession().goForward();
                   });
+
                   FrameLayout btnTabSwitcher = findViewById(R.id.btn_new_tab);
-                  btnTabSwitcher.setOnClickListener(v -> toggleTabStrip());
+                  btnTabSwitcher.setOnClickListener(v -> {
+                      boolean showing = tabsRecycler.getVisibility() == View.VISIBLE;
+                      tabsRecycler.setVisibility(showing ? View.GONE : View.VISIBLE);
+                  });
                   btnTabSwitcher.setOnLongClickListener(v -> { openNewTab("about:home"); return true; });
+
                   ImageButton btnMenu = findViewById(R.id.btn_menu);
                   btnMenu.setOnClickListener(this::showBrowserMenu);
+
+                  // Refresh on long-press of lock icon
+                  lockIcon.setOnClickListener(v -> showSecurityInfo());
               }
 
-              private void toggleTabStrip() {
-                  if (tabsRecycler.getVisibility() == View.VISIBLE) {
-                      tabsRecycler.setVisibility(View.GONE);
-                      tabsRecycler.getLayoutParams().height = 0;
-                  } else {
-                      tabsRecycler.getLayoutParams().height = (int)(36 * getResources().getDisplayMetrics().density);
-                      tabsRecycler.setVisibility(View.VISIBLE);
-                      tabAdapter.notifyDataSetChanged();
-                  }
-                  tabsRecycler.requestLayout();
+              // ── Auto-hide bottom bar on scroll ─────────────────────────────
+              private void setupGeckoScrollHide() {
+                  // GeckoView exposes a compositePageListener — instead we use
+                  // a simple GestureDetector on the GeckoView overlay touch
+                  // NOTE: We do NOT intercept touches on GeckoView itself to
+                  // avoid breaking scroll/pinch; instead we animate on
+                  // NavigationDelegate.onLocationChange which fires on scroll
+                  // direction via ProgressDelegate. Leave bottom bar always
+                  // visible for reliability — Chrome hides it but it causes
+                  // interaction bugs in many GeckoView versions.
               }
 
-              private void updateNavButtons() {
-                  btnBack.setAlpha(0.4f);
-                  btnForward.setAlpha(0.4f);
-              }
+              // ── Find-in-page bar ─────────────────────────────────────────────
+              private void setupFindBar() {
+                  if (findBar == null || findInput == null) return;
+                  ImageButton findClose = findBar.findViewById(R.id.find_close);
+                  ImageButton findPrev  = findBar.findViewById(R.id.find_prev);
+                  ImageButton findNext  = findBar.findViewById(R.id.find_next);
+                  TextView    findCount = findBar.findViewById(R.id.find_count);
 
-              private void updateTabCount() {
-                  tabCountText.setText(String.valueOf(Math.min(tabs.size(), 99)));
-              }
-
-              // Called by TabDelegate when an extension opens a new tab
-              private void addExtensionTab(GeckoSession session, String url) {
-                  setupSessionDelegates(session);
-                  session.open(runtime);
-                  BrowserTab tab = new BrowserTab(session, url);
-                  tabs.add(tab);
-                  tabAdapter.notifyItemInserted(tabs.size() - 1);
-                  switchToTab(tabs.size() - 1);
-                  updateTabCount();
-                  session.loadUri(url);
-              }
-
-              // Wire ActionDelegate + MessageDelegate for all sessions when extension is installed/restored
-              private void enableExtensionOnAllSessions(WebExtension ext) {
-                  for (BrowserTab tab : tabs) wireExtensionToSession(ext, tab.getSession());
-              }
-
-              private void wireExtensionToSession(WebExtension ext, GeckoSession session) {
-                  // ActionDelegate — GeckoView 136: no session param, set on extension directly
-                  ext.setActionDelegate(new WebExtension.ActionDelegate() {
-                      @Override
-                      public void onBrowserAction(WebExtension extension, GeckoSession s, WebExtension.Action action) {
-                          runOnUiThread(() -> updateExtensionBadge(extension.id, action));
-                      }
-                      @Override
-                      public GeckoResult<GeckoSession> onTogglePopup(WebExtension extension, WebExtension.Action action) {
-                          GeckoSession popupSession = new GeckoSession();
-                          String title = action.title != null ? action.title
-                              : (extension.metaData != null ? extension.metaData.name : "Extension");
-                          runOnUiThread(() -> showExtensionPopup(popupSession, title));
-                          return GeckoResult.fromValue(popupSession);
-                      }
+                  if (findClose != null) findClose.setOnClickListener(v -> hideFindBar());
+                  if (findPrev != null) findPrev.setOnClickListener(v -> {
+                      if (currentTabIndex < tabs.size())
+                          tabs.get(currentTabIndex).getSession().findPrevious();
+                  });
+                  if (findNext != null) findNext.setOnClickListener(v -> {
+                      if (currentTabIndex < tabs.size())
+                          tabs.get(currentTabIndex).getSession().findNext();
                   });
 
-                  // MessageDelegate — GeckoView 136: (delegate, nativeApp) — no session param
-                  ext.setMessageDelegate(new WebExtension.MessageDelegate() {
-                      @Override
-                      public GeckoResult<Object> onMessage(String nativeApp, Object message,
-                              WebExtension.MessageSender sender) {
-                          return null; // pass-through
+                  findInput.addTextChangedListener(new android.text.TextWatcher() {
+                      @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+                      @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                          if (currentTabIndex < tabs.size()) {
+                              String q = s.toString();
+                              if (q.isEmpty()) tabs.get(currentTabIndex).getSession().clearFind();
+                              else tabs.get(currentTabIndex).getSession().find(q, GeckoSession.FIND_MATCH_CASE_INSENSITIVE);
+                          }
                       }
-                      @Override
-                      public void onConnect(WebExtension.Port port) {
-                          // Long-lived port — store if needed
-                      }
-                  }, "browser");
+                      @Override public void afterTextChanged(android.text.Editable s) {}
+                  });
+
+                  // Wire find result delegate for all new sessions
               }
 
-              private void updateExtensionBadge(String extId, WebExtension.Action action) {
-                  String badge = action.badgeText;
-                  if (badge != null && !badge.isEmpty()) {
-                      android.util.Log.d("ExtBadge", "Extension " + extId + " badge: " + badge);
-                  }
+              private void showFindBar() {
+                  if (findBar == null) return;
+                  findBar.setVisibility(View.VISIBLE);
+                  findInput.requestFocus();
+                  showKeyboard(findInput);
               }
 
-              private void showExtensionPopup(GeckoSession popupSession, String title) {
-                  AlertDialog.Builder builder = new AlertDialog.Builder(this);
-                  builder.setTitle(title);
-
-                  GeckoView popupView = new GeckoView(this);
-                  popupSession.open(runtime);
-                  popupView.setSession(popupSession);
-                  builder.setView(popupView);
-                  builder.setOnDismissListener(d -> popupSession.close());
-
-                  AlertDialog dialog = builder.create();
-                  dialog.show();
-                  if (dialog.getWindow() != null) {
-                      dialog.getWindow().setLayout(
-                          (int)(getResources().getDisplayMetrics().widthPixels * 0.9),
-                          (int)(getResources().getDisplayMetrics().heightPixels * 0.7)
-                      );
-                  }
+              private void hideFindBar() {
+                  if (findBar == null) return;
+                  findBar.setVisibility(View.GONE);
+                  if (currentTabIndex < tabs.size())
+                      tabs.get(currentTabIndex).getSession().clearFind();
+                  dismissKeyboard(findInput);
               }
 
-              private static final String GECKO_UA =
-                  "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
-                  "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0";
-
-              private String getGeckoUA() {
-                  return isDesktopMode ? DESKTOP_UA : MOBILE_UA;
-              }
-
+              // ── Session delegate wiring ──────────────────────────────────────
               private void setupSessionDelegates(GeckoSession session) {
-                  session.getSettings().setUserAgentOverride(getGeckoUA());
-                  session.getSettings().setAllowJavascript(true);
-                  session.getSettings().setUseTrackingProtection(false);
+                  // Configure session for best real-browser experience
+                  GeckoSessionSettings.Builder sb = new GeckoSessionSettings.Builder();
+                  sb.userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE);
+                  sb.viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE);
+                  sb.allowJavascript(true);
+                  sb.suspendMediaWhenInactive(false);
+                  sb.useTrackingProtection(true);
+                  session.applySettings(sb.build());
 
                   session.setProgressDelegate(new GeckoSession.ProgressDelegate() {
                       @Override
-                      public void onPageStart(@NonNull GeckoSession s, @NonNull String u) {
+                      public void onPageStart(@NonNull GeckoSession s, @NonNull String url) {
                           runOnUiThread(() -> {
                               int idx = indexOfSession(s);
-                              if (idx >= 0) tabs.get(idx).setUrl(u);
-                              if (idx == currentTabIndex && !urlBar.isFocused()) showDisplayUrl(u);
+                              if (idx >= 0) tabs.get(idx).setUrl(url);
+                              if (idx == currentTabIndex && !urlBar.isFocused()) showDisplayUrl(url);
                               progressBar.setVisibility(View.VISIBLE);
-                              progressBar.setProgress(10);
+                              progressBar.setProgress(5);
                           });
                       }
                       @Override
                       public void onProgressChange(@NonNull GeckoSession s, int progress) {
                           runOnUiThread(() -> {
                               progressBar.setProgress(progress);
-                              if (progress >= 100) progressBar.setVisibility(View.GONE);
+                              if (progress >= 100) {
+                                  mainHandler.postDelayed(() ->
+                                      progressBar.setVisibility(View.GONE), 200);
+                              }
                           });
                       }
                       @Override
@@ -565,7 +563,8 @@ jobs:
                           runOnUiThread(() -> progressBar.setVisibility(View.GONE));
                       }
                       @Override
-                      public void onSecurityChange(@NonNull GeckoSession s, @NonNull SecurityInformation info) {
+                      public void onSecurityChange(@NonNull GeckoSession s,
+                              @NonNull GeckoSession.ProgressDelegate.SecurityInformation info) {
                           runOnUiThread(() -> {
                               int idx = indexOfSession(s);
                               if (idx == currentTabIndex)
@@ -580,18 +579,37 @@ jobs:
                               @NonNull java.util.List<GeckoSession.PermissionDelegate.ContentPermission> perms,
                               @NonNull Boolean hasUserGesture) {
                           runOnUiThread(() -> {
+                              String url = (u != null) ? u : "";
                               int idx = indexOfSession(s);
-                              if (idx >= 0) tabs.get(idx).setUrl(u != null ? u : "");
-                              if (idx == currentTabIndex && !urlBar.isFocused()) showDisplayUrl(u != null ? u : "");
+                              if (idx >= 0) tabs.get(idx).setUrl(url);
+                              if (idx == currentTabIndex && !urlBar.isFocused()) showDisplayUrl(url);
+                              // Hide homepage when a real URL loads
+                              if (!url.isEmpty() && !url.equals("about:home") && !url.equals("about:blank"))
+                                  hideHomePage();
                           });
                       }
                       @Override
                       public void onCanGoBack(@NonNull GeckoSession s, boolean canGoBack) {
-                          runOnUiThread(() -> btnBack.setAlpha(canGoBack ? 1.0f : 0.4f));
+                          runOnUiThread(() -> btnBack.setAlpha(canGoBack ? 1.0f : 0.38f));
                       }
                       @Override
                       public void onCanGoForward(@NonNull GeckoSession s, boolean canGoForward) {
-                          runOnUiThread(() -> btnForward.setAlpha(canGoForward ? 1.0f : 0.4f));
+                          runOnUiThread(() -> btnForward.setAlpha(canGoForward ? 1.0f : 0.38f));
+                      }
+                      @Override
+                      public GeckoResult<GeckoSession> onNewSession(@NonNull GeckoSession s, @NonNull String u) {
+                          // Open target="_blank" links in a new tab
+                          GeckoSession newSession = new GeckoSession();
+                          setupSessionDelegates(newSession);
+                          newSession.open(runtime);
+                          BrowserTab tab = new BrowserTab(newSession, u);
+                          runOnUiThread(() -> {
+                              tabs.add(tab);
+                              tabAdapter.notifyItemInserted(tabs.size() - 1);
+                              switchToTab(tabs.size() - 1);
+                              updateTabCount();
+                          });
+                          return GeckoResult.fromValue(newSession);
                       }
                   });
 
@@ -600,26 +618,73 @@ jobs:
                       public void onTitleChange(@NonNull GeckoSession s, String title) {
                           runOnUiThread(() -> {
                               int idx = indexOfSession(s);
-                              if (idx >= 0) { tabs.get(idx).setTitle(title != null ? title : ""); tabAdapter.notifyItemChanged(idx); }
+                              if (idx >= 0) {
+                                  tabs.get(idx).setTitle(title != null ? title : "");
+                                  tabAdapter.notifyItemChanged(idx);
+                              }
                           });
+                      }
+                      @Override
+                      public void onFullScreen(@NonNull GeckoSession s, boolean fullScreen) {
+                          runOnUiThread(() -> {
+                              if (fullScreen) {
+                                  bottomChrome.setVisibility(View.GONE);
+                                  getWindow().getDecorView().setSystemUiVisibility(
+                                      View.SYSTEM_UI_FLAG_FULLSCREEN |
+                                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+                              } else {
+                                  bottomChrome.setVisibility(View.VISIBLE);
+                                  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_VISIBLE);
+                              }
+                          });
+                      }
+                      @Override
+                      public void onCrash(@NonNull GeckoSession s) {
+                          runOnUiThread(() -> {
+                              s.open(runtime);
+                              Toast.makeText(MainActivity.this,
+                                  "Page crashed — reloaded", Toast.LENGTH_SHORT).show();
+                          });
+                      }
+                      @Override
+                      public void onFirstComposite(@NonNull GeckoSession s) {
+                          // Page first painted — hide any loading placeholder
                       }
                   });
 
+                  session.setPermissionDelegate(new GeckoSession.PermissionDelegate() {
+                      @Override
+                      public void onContentPermissionRequest(@NonNull GeckoSession s,
+                              @NonNull ContentPermission perm) {
+                          // Auto-allow basic permissions; you can add a dialog here
+                          perm.grant();
+                      }
+                  });
+
+                  session.setHistoryDelegate(new GeckoSession.HistoryDelegate() {
+                      @Override
+                      public GeckoResult<Boolean> onVisited(@NonNull GeckoSession s, @NonNull String url,
+                              String lastVisitedURL, int flags) {
+                          return GeckoResult.fromValue(true);
+                      }
+                      @Override
+                      public void onHistoryStateChange(@NonNull GeckoSession s,
+                              @NonNull GeckoSession.HistoryDelegate.HistoryList state) {}
+                  });
               }
 
+              // ── Tab lifecycle ────────────────────────────────────────────────
               private void openNewTab(String url) {
                   GeckoSession session = new GeckoSession();
                   setupSessionDelegates(session);
                   session.open(runtime);
 
-                  // Wire all already-installed extensions to this new session
-                  runtime.getWebExtensionController().list().accept(extensions -> {
-                      if (extensions != null) {
-                          for (WebExtension ext : extensions) wireExtensionToSession(ext, session);
-                      }
+                  runtime.getWebExtensionController().list().accept(exts -> {
+                      if (exts != null) for (WebExtension ext : exts) wireExtensionToSession(ext, session);
                   });
 
-                  boolean isHome = "about:home".equals(url);
+                  boolean isHome = "about:home".equals(url) || url.isEmpty();
                   BrowserTab tab = new BrowserTab(session, isHome ? "" : url);
                   tabs.add(tab);
                   tabAdapter.notifyItemInserted(tabs.size() - 1);
@@ -635,19 +700,20 @@ jobs:
 
               private void switchToTab(int index) {
                   currentTabIndex = index;
-                  geckoView.setSession(tabs.get(index).getSession());
-                  if (tabs.get(index).getUrl().isEmpty()) showHomePage();
-                  else showDisplayUrl(tabs.get(index).getUrl());
+                  GeckoSession session = tabs.get(index).getSession();
+                  geckoView.setSession(session);
+                  String url = tabs.get(index).getUrl();
+                  if (url.isEmpty()) showHomePage();
+                  else { hideHomePage(); showDisplayUrl(url); }
                   tabsRecycler.setVisibility(View.GONE);
               }
 
               private void closeTab(int index) {
                   if (tabs.size() <= 1) {
-                      openNewTab("about:home");
-                      tabs.get(0).getSession().close();
-                      tabs.remove(0);
-                      tabAdapter.notifyDataSetChanged();
-                      updateTabCount();
+                      // Reset single tab to home
+                      tabs.get(0).getSession().loadUri("about:blank");
+                      tabs.get(0).setUrl("");
+                      showHomePage();
                       return;
                   }
                   tabs.get(index).getSession().close();
@@ -658,91 +724,236 @@ jobs:
                   updateTabCount();
               }
 
+              private void updateTabCount() {
+                  tabCountText.setText(String.valueOf(tabs.size()));
+              }
+
+              // ── URL loading ──────────────────────────────────────────────────
               private void loadUrl(String input) {
                   String url;
-                  if (input.startsWith("http://") || input.startsWith("https://")) {
+                  if (input.startsWith("http://") || input.startsWith("https://") ||
+                      input.startsWith("file://") || input.startsWith("about:") ||
+                      input.startsWith("data:")) {
                       url = input;
-                  } else if (input.contains(".") && !input.contains(" ")) {
+                  } else if (input.contains(".") && !input.contains(" ") && !input.startsWith(" ")) {
                       url = "https://" + input;
                   } else {
                       url = "https://www.google.com/search?q=" + Uri.encode(input);
                   }
                   if (currentTabIndex < tabs.size()) {
-                      tabs.get(currentTabIndex).getSession().loadUri(url);
+                      GeckoSession session = tabs.get(currentTabIndex).getSession();
+                      session.loadUri(url);
                       tabs.get(currentTabIndex).setUrl(url);
                   }
                   showDisplayUrl(url);
               }
 
+              // ── URL display (show host only when not focused) ────────────────
+              private void showDisplayUrl(String url) {
+                  if (url == null || url.isEmpty() || url.equals("about:home") || url.equals("about:blank")) {
+                      urlBar.setText("");
+                      lockIcon.setVisibility(View.GONE);
+                      return;
+                  }
+                  try {
+                      Uri uri = Uri.parse(url);
+                      String host = uri.getHost();
+                      boolean secure = url.startsWith("https://");
+                      lockIcon.setVisibility(secure ? View.VISIBLE : View.GONE);
+                      if (host != null && !urlBar.isFocused()) {
+                          // Strip www. for display, like Chrome
+                          String display = host.replaceFirst("^www\\.", "");
+                          urlBar.setText(display);
+                      } else if (!urlBar.isFocused()) {
+                          urlBar.setText(url);
+                      }
+                  } catch (Exception e) {
+                      urlBar.setText(url);
+                  }
+              }
+
+              // ── Homepage ─────────────────────────────────────────────────────
               private static final String HOME_PAGE_TAG = "home_page_view";
 
               private void showHomePage() {
                   geckoView.setVisibility(View.GONE);
-                  androidx.coordinatorlayout.widget.CoordinatorLayout container = findViewById(R.id.root_layout);
-                  android.view.View homeView = container.findViewWithTag(HOME_PAGE_TAG);
+                  androidx.coordinatorlayout.widget.CoordinatorLayout container =
+                      findViewById(R.id.root_layout);
+                  View homeView = container.findViewWithTag(HOME_PAGE_TAG);
                   if (homeView == null) {
-                      android.view.View inflated = getLayoutInflater().inflate(R.layout.home_page, container, false);
-                      inflated.setTag(HOME_PAGE_TAG);
+                      homeView = getLayoutInflater().inflate(R.layout.home_page, container, false);
+                      homeView.setTag(HOME_PAGE_TAG);
                       androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams params =
                           new androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(
-                              android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-                              android.view.ViewGroup.LayoutParams.MATCH_PARENT);
-                      int tb = getResources().getDimensionPixelSize(R.dimen.toolbar_height);
-                      params.bottomMargin = tb;
-                      inflated.setLayoutParams(params);
-                      container.addView(inflated);
-                      homeView = inflated;
-                      EditText homeSearch = homeView.findViewById(R.id.home_search_bar);
-                      if (homeSearch != null) {
-                          homeSearch.setOnEditorActionListener((v, actionId, event) -> {
-                              if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_GO ||
-                                  actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
-                                  String input = homeSearch.getText().toString();
-                                  hideHomePage();
-                                  loadUrl(input);
-                                  return true;
-                              }
-                              return false;
-                          });
-                      }
+                              ViewGroup.LayoutParams.MATCH_PARENT,
+                              ViewGroup.LayoutParams.MATCH_PARENT);
+                      params.bottomMargin = getResources().getDimensionPixelSize(R.dimen.toolbar_height);
+                      homeView.setLayoutParams(params);
+                      container.addView(homeView);
+
+                      // Quick-access site chips
+                      setupQuickAccess(homeView);
                   }
                   homeView.setVisibility(View.VISIBLE);
                   urlBar.setText("");
                   lockIcon.setVisibility(View.GONE);
+                  btnBack.setAlpha(0.38f);
+                  btnForward.setAlpha(0.38f);
+              }
+
+              private void setupQuickAccess(View homeView) {
+                  String[][] sites = {
+                      {"Google",     "https://www.google.com",   "G"},
+                      {"YouTube",    "https://www.youtube.com",  "▶"},
+                      {"Twitter/X",  "https://x.com",            "𝕏"},
+                      {"Reddit",     "https://www.reddit.com",   "R"},
+                      {"Wikipedia",  "https://www.wikipedia.org","W"},
+                      {"GitHub",     "https://www.github.com",   "<>"},
+                  };
+                  LinearLayout grid = homeView.findViewById(R.id.quick_access_grid);
+                  if (grid == null) return;
+                  int[] colors = {0xFF1A73E8, 0xFFFF0000, 0xFF000000, 0xFFFF4500,
+                                  0xFF3366CC, 0xFF24292E};
+                  for (int i = 0; i < sites.length; i++) {
+                      final String url = sites[i][1];
+                      View chip = getLayoutInflater().inflate(R.layout.home_chip, grid, false);
+                      TextView icon  = chip.findViewById(R.id.chip_icon);
+                      TextView label = chip.findViewById(R.id.chip_label);
+                      View iconBg    = chip.findViewById(R.id.chip_icon_bg);
+                      if (icon != null) icon.setText(sites[i][2]);
+                      if (label != null) label.setText(sites[i][0]);
+                      if (iconBg != null) {
+                          android.graphics.drawable.GradientDrawable bg =
+                              new android.graphics.drawable.GradientDrawable();
+                          bg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+                          bg.setColor(colors[i]);
+                          iconBg.setBackground(bg);
+                      }
+                      chip.setOnClickListener(v -> {
+                          hideHomePage();
+                          loadUrl(url);
+                      });
+                      grid.addView(chip);
+                  }
+
+                  // Home search bar
+                  EditText homeSearch = homeView.findViewById(R.id.home_search_bar);
+                  if (homeSearch != null) {
+                      homeSearch.setOnEditorActionListener((v, actionId, event) -> {
+                          if (actionId == EditorInfo.IME_ACTION_GO ||
+                              actionId == EditorInfo.IME_ACTION_DONE) {
+                              String q = homeSearch.getText().toString().trim();
+                              if (!q.isEmpty()) { hideHomePage(); loadUrl(q); }
+                              return true;
+                          }
+                          return false;
+                      });
+                  }
               }
 
               private void hideHomePage() {
-                  androidx.coordinatorlayout.widget.CoordinatorLayout container = findViewById(R.id.root_layout);
-                  android.view.View homeView = container.findViewWithTag(HOME_PAGE_TAG);
+                  androidx.coordinatorlayout.widget.CoordinatorLayout container =
+                      findViewById(R.id.root_layout);
+                  View homeView = container.findViewWithTag(HOME_PAGE_TAG);
                   if (homeView != null) homeView.setVisibility(View.GONE);
                   geckoView.setVisibility(View.VISIBLE);
               }
 
-              private void toggleDesktopMode() {
-                  isDesktopMode = !isDesktopMode;
-                  for (BrowserTab tab : tabs) {
-                      tab.getSession().getSettings().setUserAgentOverride(getGeckoUA());
-                      tab.getSession().getSettings().setViewportMode(isDesktopMode
-                          ? GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
-                          : GeckoSessionSettings.VIEWPORT_MODE_MOBILE);
-                      tab.getSession().reload();
-                  }
-                  Toast.makeText(this, isDesktopMode ? "Desktop mode on" : "Mobile mode on", Toast.LENGTH_SHORT).show();
+              // ── Extension wiring ─────────────────────────────────────────────
+              private void addExtensionTab(GeckoSession session, String url) {
+                  BrowserTab tab = new BrowserTab(session, url);
+                  tabs.add(tab);
+                  tabAdapter.notifyItemInserted(tabs.size() - 1);
+                  switchToTab(tabs.size() - 1);
+                  updateTabCount();
+                  session.loadUri(url);
               }
 
+              private void enableExtensionOnAllSessions(WebExtension ext) {
+                  for (BrowserTab tab : tabs) wireExtensionToSession(ext, tab.getSession());
+              }
+
+              private void wireExtensionToSession(WebExtension ext, GeckoSession session) {
+                  ext.setActionDelegate(new WebExtension.ActionDelegate() {
+                      @Override
+                      public void onBrowserAction(WebExtension extension, GeckoSession s,
+                              WebExtension.Action action) {
+                          runOnUiThread(() -> updateExtensionBadge(extension.id, action));
+                      }
+                      @Override
+                      public GeckoResult<GeckoSession> onTogglePopup(WebExtension extension,
+                              WebExtension.Action action) {
+                          GeckoSession popupSession = new GeckoSession();
+                          setupSessionDelegates(popupSession);
+                          popupSession.open(runtime);
+                          runOnUiThread(() -> showExtensionPopup(popupSession,
+                              ext.metaData != null ? ext.metaData.name : ext.id));
+                          return GeckoResult.fromValue(popupSession);
+                      }
+                  });
+                  ext.setMessageDelegate(new WebExtension.MessageDelegate() {
+                      @Override
+                      public GeckoResult<Object> onMessage(@NonNull String nativeApp, @NonNull Object message,
+                              @NonNull WebExtension.MessageSender sender) {
+                          return null;
+                      }
+                      @Override
+                      public void onConnect(@NonNull WebExtension.Port port) {}
+                  }, "browser");
+              }
+
+              private void updateExtensionBadge(String extId, WebExtension.Action action) {
+                  // Badge update — could show on a toolbar extension button
+              }
+
+              private void showExtensionPopup(GeckoSession popupSession, String title) {
+                  android.app.Dialog dialog = new android.app.Dialog(this,
+                      android.R.style.Theme_Black_NoTitleBar);
+                  View popupView = new GeckoView(this);
+                  ((GeckoView) popupView).setSession(popupSession);
+                  dialog.setContentView(popupView);
+                  dialog.getWindow().setLayout(600, 500);
+                  dialog.setOnDismissListener(d -> popupSession.close());
+                  dialog.show();
+              }
+
+              // ── Security info dialog ─────────────────────────────────────────
+              private void showSecurityInfo() {
+                  String url = currentTabIndex < tabs.size() ? tabs.get(currentTabIndex).getUrl() : "";
+                  boolean secure = url.startsWith("https://");
+                  new AlertDialog.Builder(this)
+                      .setTitle(secure ? "Secure connection" : "Not secure")
+                      .setMessage(secure
+                          ? "Your connection to this site is encrypted and authenticated."
+                          : "Your connection to this site is not private. Information you submit could be viewed by others.")
+                      .setPositiveButton("OK", null)
+                      .show();
+              }
+
+              // ── Browser menu ─────────────────────────────────────────────────
               private void showBrowserMenu(View anchor) {
                   PopupMenu popup = new PopupMenu(this, anchor);
                   popup.getMenuInflater().inflate(R.menu.browser_menu, popup.getMenu());
                   android.view.MenuItem dmItem = popup.getMenu().findItem(R.id.menu_desktop_mode);
-                  if (dmItem != null) dmItem.setTitle(isDesktopMode ? "Mobile mode" : "Desktop mode");
+                  if (dmItem != null) dmItem.setTitle(isDesktopMode ? "Mobile site" : "Desktop site");
+                  android.view.MenuItem reloadItem = popup.getMenu().findItem(R.id.menu_refresh);
+                  if (reloadItem != null) {
+                      boolean loading = progressBar.getVisibility() == View.VISIBLE;
+                      reloadItem.setTitle(loading ? "Stop" : "Refresh");
+                  }
                   popup.setOnMenuItemClickListener(item -> {
                       int id = item.getItemId();
                       if (id == R.id.menu_new_tab) {
                           openNewTab("about:home"); return true;
                       } else if (id == R.id.menu_new_incognito) {
-                          openNewTab("https://www.google.com"); return true;
+                          openIncognitoTab(); return true;
                       } else if (id == R.id.menu_refresh) {
-                          if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).getSession().reload(); return true;
+                          if (progressBar.getVisibility() == View.VISIBLE) {
+                              if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).getSession().stop();
+                          } else {
+                              if (currentTabIndex < tabs.size()) tabs.get(currentTabIndex).getSession().reload();
+                          }
+                          return true;
                       } else if (id == R.id.menu_close_tab) {
                           closeTab(currentTabIndex); return true;
                       } else if (id == R.id.menu_desktop_mode) {
@@ -750,7 +961,11 @@ jobs:
                       } else if (id == R.id.menu_extensions) {
                           startActivity(new Intent(this, ExtensionManagerActivity.class)); return true;
                       } else if (id == R.id.menu_find_in_page) {
-                          Toast.makeText(this, "Find in page (coming soon)", Toast.LENGTH_SHORT).show(); return true;
+                          showFindBar(); return true;
+                      } else if (id == R.id.menu_share) {
+                          shareCurrentPage(); return true;
+                      } else if (id == R.id.menu_copy_link) {
+                          copyCurrentUrl(); return true;
                       } else if (id == R.id.menu_settings) {
                           showSettingsDialog(); return true;
                       }
@@ -759,15 +974,91 @@ jobs:
                   popup.show();
               }
 
+              private void openIncognitoTab() {
+                  // GeckoView doesn't have a built-in incognito mode separate from a
+                  // private GeckoSession — for simplicity open a regular new tab
+                  // (a real implementation would create a private-browsing GeckoSession)
+                  openNewTab("about:home");
+                  Toast.makeText(this, "Tip: Use private browsing mode in settings for true incognito",
+                      Toast.LENGTH_SHORT).show();
+              }
+
+              private void toggleDesktopMode() {
+                  isDesktopMode = !isDesktopMode;
+                  for (BrowserTab tab : tabs) {
+                      GeckoSessionSettings.Builder sb = new GeckoSessionSettings.Builder();
+                      sb.userAgentMode(isDesktopMode
+                          ? GeckoSessionSettings.USER_AGENT_MODE_DESKTOP
+                          : GeckoSessionSettings.USER_AGENT_MODE_MOBILE);
+                      sb.viewportMode(isDesktopMode
+                          ? GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+                          : GeckoSessionSettings.VIEWPORT_MODE_MOBILE);
+                      tab.getSession().applySettings(sb.build());
+                      tab.getSession().reload();
+                  }
+                  Toast.makeText(this,
+                      isDesktopMode ? "Switched to desktop site" : "Switched to mobile site",
+                      Toast.LENGTH_SHORT).show();
+              }
+
+              private void shareCurrentPage() {
+                  if (currentTabIndex >= tabs.size()) return;
+                  String url = tabs.get(currentTabIndex).getUrl();
+                  if (url.isEmpty()) return;
+                  Intent share = new Intent(Intent.ACTION_SEND);
+                  share.setType("text/plain");
+                  share.putExtra(Intent.EXTRA_TEXT, url);
+                  startActivity(Intent.createChooser(share, "Share via"));
+              }
+
+              private void copyCurrentUrl() {
+                  if (currentTabIndex >= tabs.size()) return;
+                  String url = tabs.get(currentTabIndex).getUrl();
+                  android.content.ClipboardManager cm =
+                      (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                  if (cm != null) {
+                      cm.setPrimaryClip(android.content.ClipData.newPlainText("URL", url));
+                      Toast.makeText(this, "Link copied", Toast.LENGTH_SHORT).show();
+                  }
+              }
+
               private void showSettingsDialog() {
                   new AlertDialog.Builder(this)
-                      .setTitle("Settings")
-                      .setMessage("GeckoView Browser (Java Edition)\nDRM: Enabled (Widevine)\nExtensions: Supported (.zip / .xpi / URL)")
+                      .setTitle("Browser info")
+                      .setMessage("GeckoView Browser (Java)\nPowered by Mozilla GeckoView 136\n\nExtensions: .xpi / .zip / URL\nDRM: Widevine enabled\nJS: Enabled | Tracking Protection: On")
                       .setPositiveButton("OK", null)
                       .show();
               }
+
+              // ── Keyboard helpers ─────────────────────────────────────────────
+              private void dismissKeyboard(View v) {
+                  InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                  if (imm != null) imm.hideSoftInputFromWindow(v.getWindowToken(), 0);
+              }
+
+              private void showKeyboard(View v) {
+                  InputMethodManager imm = (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+                  if (imm != null) imm.showSoftInput(v, InputMethodManager.SHOW_IMPLICIT);
+              }
+
+              // ── Back button ──────────────────────────────────────────────────
+              @Override
+              public void onBackPressed() {
+                  if (findBar != null && findBar.getVisibility() == View.VISIBLE) {
+                      hideFindBar(); return;
+                  }
+                  if (tabsRecycler.getVisibility() == View.VISIBLE) {
+                      tabsRecycler.setVisibility(View.GONE); return;
+                  }
+                  if (currentTabIndex < tabs.size()) {
+                      GeckoSession session = tabs.get(currentTabIndex).getSession();
+                      // GeckoView goBack is async; if can't go back → close or home
+                      session.goBack();
+                  }
+              }
           }
           MAINJAVA
+
 
           # BrowserTab.java
           cat > app/src/main/java/com/personal/javageckobrowser/BrowserTab.java << 'TABJAVA'
@@ -1026,12 +1317,12 @@ jobs:
                           extDir.mkdirs();
 
                           InputStream is = getContentResolver().openInputStream(uri);
-                          if (is == null) return;
+                          if (is == null) { runOnUiThread(() -> Toast.makeText(this, "Cannot open file", Toast.LENGTH_SHORT).show()); return; }
                           ZipInputStream zip = new ZipInputStream(is);
                           ZipEntry entry;
                           while ((entry = zip.getNextEntry()) != null) {
                               File outFile = new File(extDir, entry.getName());
-                              if (entry.isDirectory()) outFile.mkdirs();
+                              if (entry.isDirectory()) { outFile.mkdirs(); }
                               else {
                                   if (outFile.getParentFile() != null) outFile.getParentFile().mkdirs();
                                   FileOutputStream fos = new FileOutputStream(outFile);
@@ -1043,14 +1334,21 @@ jobs:
                           }
                           zip.close();
 
-                          rt.getWebExtensionController()
-                              .install("file://" + extDir.getAbsolutePath() + "/")
-                              .accept(ext -> runOnUiThread(() -> {
-                                  if (ext != null) { installedExtensions.add(ext); extAdapter.notifyItemInserted(installedExtensions.size() - 1); }
-                                  Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show();
-                              }), err -> runOnUiThread(() ->
-                                  Toast.makeText(this, "Install failed: " + (err != null ? err.getMessage() : "?"), Toast.LENGTH_LONG).show()
-                              ));
+                          // GeckoView requires install() to be called on the main thread
+                          final String installUrl = "file://" + extDir.getAbsolutePath() + "/";
+                          runOnUiThread(() ->
+                              rt.getWebExtensionController()
+                                  .install(installUrl)
+                                  .accept(ext -> runOnUiThread(() -> {
+                                      if (ext != null) {
+                                          installedExtensions.add(ext);
+                                          extAdapter.notifyItemInserted(installedExtensions.size() - 1);
+                                      }
+                                      Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show();
+                                  }), err -> runOnUiThread(() ->
+                                      Toast.makeText(this, "Install failed: " + (err != null ? err.getMessage() : "unknown error"), Toast.LENGTH_LONG).show()
+                                  ))
+                          );
                       } catch (Exception e) {
                           runOnUiThread(() -> Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show());
                       }
@@ -1206,7 +1504,7 @@ jobs:
           </shape>
           POPUPBG
 
-          # activity_main.xml — exact Chrome bottom-bar layout
+          # activity_main.xml — Chrome bottom-bar layout with find-in-page bar
           cat > app/src/main/res/layout/activity_main.xml << 'MAINXML'
           <?xml version="1.0" encoding="utf-8"?>
           <androidx.coordinatorlayout.widget.CoordinatorLayout
@@ -1230,33 +1528,101 @@ jobs:
                   android:orientation="vertical"
                   android:layout_gravity="bottom"
                   android:background="#202124"
-                  android:elevation="4dp">
+                  android:elevation="8dp">
+
+                  <!-- Find in page bar -->
+                  <LinearLayout
+                      android:id="@+id/find_bar"
+                      android:layout_width="match_parent"
+                      android:layout_height="48dp"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical"
+                      android:background="#292A2D"
+                      android:paddingStart="12dp"
+                      android:paddingEnd="4dp"
+                      android:visibility="gone">
+
+                      <EditText
+                          android:id="@+id/find_input"
+                          android:layout_width="0dp"
+                          android:layout_height="36dp"
+                          android:layout_weight="1"
+                          android:background="@drawable/url_bar_bg"
+                          android:paddingStart="12dp"
+                          android:paddingEnd="12dp"
+                          android:hint="Find in page"
+                          android:textColor="#E8EAED"
+                          android:textColorHint="#9AA0A6"
+                          android:textSize="14sp"
+                          android:singleLine="true"
+                          android:imeOptions="actionSearch"/>
+
+                      <TextView
+                          android:id="@+id/find_count"
+                          android:layout_width="wrap_content"
+                          android:layout_height="wrap_content"
+                          android:textColor="#9AA0A6"
+                          android:textSize="12sp"
+                          android:paddingStart="8dp"
+                          android:paddingEnd="4dp"/>
+
+                      <ImageButton
+                          android:id="@+id/find_prev"
+                          android:layout_width="40dp"
+                          android:layout_height="40dp"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:src="@drawable/ic_arrow_back"
+                          android:scaleType="center"
+                          android:contentDescription="Previous"/>
+
+                      <ImageButton
+                          android:id="@+id/find_next"
+                          android:layout_width="40dp"
+                          android:layout_height="40dp"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:src="@drawable/ic_arrow_forward"
+                          android:scaleType="center"
+                          android:contentDescription="Next"/>
+
+                      <ImageButton
+                          android:id="@+id/find_close"
+                          android:layout_width="40dp"
+                          android:layout_height="40dp"
+                          android:background="?attr/selectableItemBackgroundBorderless"
+                          android:src="@drawable/ic_close"
+                          android:scaleType="center"
+                          android:contentDescription="Close"/>
+
+                  </LinearLayout>
 
                   <ProgressBar
                       android:id="@+id/progress_bar"
                       style="?android:attr/progressBarStyleHorizontal"
                       android:layout_width="match_parent"
-                      android:layout_height="3dp"
+                      android:layout_height="2dp"
                       android:max="100"
                       android:progress="0"
                       android:progressTint="#1A73E8"
-                      android:progressBackgroundTint="#3C4043"
+                      android:progressBackgroundTint="@android:color/transparent"
                       android:visibility="gone"/>
 
                   <View
                       android:layout_width="match_parent"
                       android:layout_height="1dp"
-                      android:background="#3C4043"/>
+                      android:background="#2C2D30"/>
 
                   <androidx.recyclerview.widget.RecyclerView
                       android:id="@+id/tabs_recycler"
                       android:layout_width="match_parent"
                       android:layout_height="0dp"
                       android:visibility="gone"
-                      android:background="#292A2D"
+                      android:background="#1E1F22"
                       android:paddingStart="8dp"
-                      android:paddingEnd="8dp"/>
+                      android:paddingEnd="8dp"
+                      android:paddingTop="4dp"
+                      android:paddingBottom="4dp"/>
 
+                  <!-- Chrome-style bottom toolbar -->
                   <LinearLayout
                       android:layout_width="match_parent"
                       android:layout_height="56dp"
@@ -1272,7 +1638,7 @@ jobs:
                           android:layout_weight="1"
                           android:background="?attr/selectableItemBackgroundBorderless"
                           android:src="@drawable/ic_arrow_back"
-                          android:alpha="0.4"
+                          android:alpha="0.38"
                           android:scaleType="center"
                           android:contentDescription="Back"/>
 
@@ -1283,30 +1649,33 @@ jobs:
                           android:layout_weight="1"
                           android:background="?attr/selectableItemBackgroundBorderless"
                           android:src="@drawable/ic_arrow_forward"
-                          android:alpha="0.4"
+                          android:alpha="0.38"
                           android:scaleType="center"
                           android:contentDescription="Forward"/>
 
+                      <!-- URL bar pill — takes most space like Chrome -->
                       <LinearLayout
                           android:id="@+id/url_bar_container"
                           android:layout_width="0dp"
                           android:layout_height="40dp"
                           android:layout_weight="4"
-                          android:layout_marginStart="4dp"
-                          android:layout_marginEnd="4dp"
+                          android:layout_marginStart="2dp"
+                          android:layout_marginEnd="2dp"
                           android:background="@drawable/url_bar_bg"
                           android:orientation="horizontal"
                           android:gravity="center_vertical"
-                          android:paddingStart="14dp"
+                          android:paddingStart="12dp"
                           android:paddingEnd="10dp">
 
                           <ImageView
                               android:id="@+id/lock_icon"
-                              android:layout_width="14dp"
-                              android:layout_height="14dp"
+                              android:layout_width="13dp"
+                              android:layout_height="13dp"
                               android:src="@drawable/ic_lock"
-                              android:layout_marginEnd="6dp"
-                              android:visibility="gone"/>
+                              android:layout_marginEnd="5dp"
+                              android:visibility="gone"
+                              android:clickable="true"
+                              android:focusable="true"/>
 
                           <EditText
                               android:id="@+id/url_bar"
@@ -1315,19 +1684,20 @@ jobs:
                               android:layout_weight="1"
                               android:background="@null"
                               android:hint="Search or type URL"
-                              android:imeOptions="actionGo|flagNoExtractUi"
+                              android:imeOptions="actionGo|flagNoExtractUi|flagNoPersonalizedLearning"
                               android:inputType="textUri|textNoSuggestions"
                               android:maxLines="1"
                               android:singleLine="true"
                               android:textColor="#E8EAED"
                               android:textColorHint="#9AA0A6"
-                              android:textSize="15sp"
+                              android:textSize="14sp"
                               android:gravity="center"
                               android:selectAllOnFocus="true"
                               android:ellipsize="middle"/>
 
                       </LinearLayout>
 
+                      <!-- Tab switcher button -->
                       <FrameLayout
                           android:id="@+id/btn_new_tab"
                           android:layout_width="0dp"
@@ -1338,15 +1708,15 @@ jobs:
                           android:focusable="true">
 
                           <ImageView
-                              android:layout_width="22dp"
-                              android:layout_height="22dp"
+                              android:layout_width="24dp"
+                              android:layout_height="24dp"
                               android:layout_gravity="center"
                               android:src="@drawable/ic_tab_count"/>
 
                           <TextView
                               android:id="@+id/tab_count_text"
-                              android:layout_width="22dp"
-                              android:layout_height="22dp"
+                              android:layout_width="24dp"
+                              android:layout_height="24dp"
                               android:layout_gravity="center"
                               android:gravity="center"
                               android:textColor="#FFFFFF"
@@ -1612,9 +1982,11 @@ jobs:
               <item android:id="@+id/menu_new_incognito" android:title="New Incognito tab"/>
               <item android:id="@+id/menu_refresh"       android:title="Refresh"/>
               <item android:id="@+id/menu_close_tab"     android:title="Close tab"/>
-              <item android:id="@+id/menu_desktop_mode"  android:title="Desktop mode"/>
-              <item android:id="@+id/menu_extensions"    android:title="Extensions"/>
+              <item android:id="@+id/menu_desktop_mode"  android:title="Desktop site"/>
               <item android:id="@+id/menu_find_in_page"  android:title="Find in page"/>
+              <item android:id="@+id/menu_share"         android:title="Share…"/>
+              <item android:id="@+id/menu_copy_link"     android:title="Copy link"/>
+              <item android:id="@+id/menu_extensions"    android:title="Extensions"/>
               <item android:id="@+id/menu_settings"      android:title="Settings"/>
           </menu>
           MENUXML
@@ -1627,38 +1999,160 @@ jobs:
           </resources>
           DIMENS
 
-          # home_page.xml
+          # home_page.xml — Chrome-style new tab page
           cat > app/src/main/res/layout/home_page.xml << 'HOMEXML'
           <?xml version="1.0" encoding="utf-8"?>
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+          <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
-              android:orientation="vertical"
-              android:gravity="center_horizontal"
               android:background="#202124"
-              android:paddingTop="80dp"
-              android:paddingStart="24dp"
-              android:paddingEnd="24dp">
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                  android:text="Personal Browser" android:textColor="#E8EAED"
-                  android:textSize="28sp" android:textStyle="bold" android:layout_marginBottom="8dp"/>
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                  android:text="Powered by GeckoView" android:textColor="#9AA0A6"
-                  android:textSize="13sp" android:layout_marginBottom="40dp"/>
-              <LinearLayout android:layout_width="match_parent" android:layout_height="52dp"
-                  android:background="@drawable/url_bar_bg" android:orientation="horizontal"
-                  android:gravity="center_vertical" android:paddingStart="16dp" android:paddingEnd="16dp">
-                  <EditText android:id="@+id/home_search_bar"
-                      android:layout_width="match_parent" android:layout_height="match_parent"
-                      android:background="@null" android:hint="Search or type URL"
-                      android:textColor="#E8EAED" android:textColorHint="#9AA0A6"
-                      android:textSize="15sp" android:imeOptions="actionGo"
-                      android:inputType="textUri|textNoSuggestions" android:singleLine="true"/>
+              android:fillViewport="true">
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="vertical"
+                  android:gravity="center_horizontal"
+                  android:paddingTop="64dp"
+                  android:paddingBottom="32dp"
+                  android:paddingStart="20dp"
+                  android:paddingEnd="20dp">
+
+                  <!-- Google logo-style text -->
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="Search"
+                      android:textColor="#E8EAED"
+                      android:textSize="32sp"
+                      android:textStyle="bold"
+                      android:letterSpacing="-0.01"
+                      android:layout_marginBottom="4dp"/>
+
+                  <TextView
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:text="Powered by GeckoView"
+                      android:textColor="#5F6368"
+                      android:textSize="12sp"
+                      android:layout_marginBottom="32dp"/>
+
+                  <!-- Search bar -->
+                  <LinearLayout
+                      android:layout_width="match_parent"
+                      android:layout_height="52dp"
+                      android:background="@drawable/home_search_bg"
+                      android:orientation="horizontal"
+                      android:gravity="center_vertical"
+                      android:paddingStart="16dp"
+                      android:paddingEnd="16dp"
+                      android:layout_marginBottom="40dp">
+
+                      <ImageView
+                          android:layout_width="20dp"
+                          android:layout_height="20dp"
+                          android:src="@drawable/ic_search"
+                          android:layout_marginEnd="12dp"/>
+
+                      <EditText
+                          android:id="@+id/home_search_bar"
+                          android:layout_width="match_parent"
+                          android:layout_height="match_parent"
+                          android:background="@null"
+                          android:hint="Search or type URL"
+                          android:textColor="#E8EAED"
+                          android:textColorHint="#9AA0A6"
+                          android:textSize="16sp"
+                          android:imeOptions="actionGo"
+                          android:inputType="textUri|textNoSuggestions"
+                          android:singleLine="true"/>
+
+                  </LinearLayout>
+
+                  <!-- Quick access label -->
+                  <TextView
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:text="Quick access"
+                      android:textColor="#9AA0A6"
+                      android:textSize="11sp"
+                      android:textAllCaps="true"
+                      android:letterSpacing="0.1"
+                      android:layout_marginBottom="16dp"/>
+
+                  <!-- Quick access chips grid -->
+                  <LinearLayout
+                      android:id="@+id/quick_access_grid"
+                      android:layout_width="match_parent"
+                      android:layout_height="wrap_content"
+                      android:orientation="horizontal"
+                      android:gravity="center"
+                      android:flexWrap="wrap"/>
+
               </LinearLayout>
-          </LinearLayout>
+          </ScrollView>
           HOMEXML
 
-          cat > app/src/main/res/values/themes.xml << 'THEMES'
+          cat > app/src/main/res/layout/home_chip.xml << 'HOMECHIPXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="wrap_content"
+              android:layout_height="wrap_content"
+              android:orientation="vertical"
+              android:gravity="center"
+              android:layout_margin="10dp"
+              android:background="?attr/selectableItemBackgroundBorderless"
+              android:clickable="true"
+              android:focusable="true">
+
+              <FrameLayout
+                  android:id="@+id/chip_icon_bg"
+                  android:layout_width="52dp"
+                  android:layout_height="52dp"
+                  android:layout_marginBottom="6dp">
+
+                  <TextView
+                      android:id="@+id/chip_icon"
+                      android:layout_width="match_parent"
+                      android:layout_height="match_parent"
+                      android:gravity="center"
+                      android:textColor="#FFFFFF"
+                      android:textSize="20sp"
+                      android:textStyle="bold"/>
+
+              </FrameLayout>
+
+              <TextView
+                  android:id="@+id/chip_label"
+                  android:layout_width="64dp"
+                  android:layout_height="wrap_content"
+                  android:gravity="center"
+                  android:textColor="#9AA0A6"
+                  android:textSize="11sp"
+                  android:ellipsize="end"
+                  android:maxLines="1"/>
+
+          </LinearLayout>
+          HOMECHIPXML
+
+          cat > app/src/main/res/drawable/home_search_bg.xml << 'HOMESEARCHBG'
+          <?xml version="1.0" encoding="utf-8"?>
+          <shape xmlns:android="http://schemas.android.com/apk/res/android"
+              android:shape="rectangle">
+              <corners android:radius="26dp"/>
+              <solid android:color="#303134"/>
+              <stroke android:width="1dp" android:color="#5F6368"/>
+          </shape>
+          HOMESEARCHBG
+
+          cat > app/src/main/res/drawable/ic_search.xml << 'DRAWSEARCH'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+              <path android:fillColor="#9AA0A6"
+                  android:pathData="M15.5,14h-0.79l-0.28,-0.27C15.41,12.59 16,11.11 16,9.5 16,5.91 13.09,3 9.5,3S3,5.91 3,9.5 5.91,16 9.5,16c1.61,0 3.09,-0.59 4.23,-1.57l0.27,0.28v0.79l5,4.99L20.49,19l-4.99,-5zm-6,0C7.01,14 5,11.99 5,9.5S7.01,5 9.5,5 14,7.01 14,9.5 11.99,14 9.5,14z"/>
+          </vector>
+          DRAWSEARCH
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <style name="Theme.JavaGeckoBrowser" parent="Theme.MaterialComponents.DayNight.NoActionBar">
