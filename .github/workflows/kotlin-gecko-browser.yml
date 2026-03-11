@@ -216,6 +216,42 @@ jobs:
           </manifest>
           MANIFEST
 
+          # BaseActivity.kt — handles edge-to-edge window decor for all activities
+          cat > app/src/main/kotlin/com/personal/geckobrowser/BaseActivity.kt << 'BASEKT'
+          package com.personal.geckobrowser
+
+          import android.os.Bundle
+          import android.view.View
+          import android.view.WindowInsets
+          import androidx.appcompat.app.AppCompatActivity
+
+          open class BaseActivity : AppCompatActivity() {
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  window.setDecorFitsSystemWindows(false)
+              }
+
+              override fun onContentChanged() {
+                  super.onContentChanged()
+                  applyWindowInsets()
+              }
+
+              private fun applyWindowInsets() {
+                  val root = findViewById<View>(android.R.id.content) ?: return
+                  root.setOnApplyWindowInsetsListener { v, insets ->
+                      val sys = insets.getInsets(WindowInsets.Type.systemBars())
+                      v.setPadding(sys.left, sys.top, sys.right, 0)
+                      // Let each activity adjust its own bottom padding via bottom_chrome or toolbar
+                      val bottomBar = findViewById<View>(R.id.bottom_chrome)
+                          ?: findViewById<View>(R.id.toolbar_ext)
+                      bottomBar?.setPadding(0, 0, 0, sys.bottom)
+                      insets
+                  }
+                  root.requestApplyInsets()
+              }
+          }
+          BASEKT
+
           # MainActivity.kt
           cat > app/src/main/kotlin/com/personal/geckobrowser/MainActivity.kt << 'MAINKT'
           package com.personal.geckobrowser
@@ -232,11 +268,16 @@ jobs:
           import androidx.recyclerview.widget.RecyclerView
           import org.mozilla.geckoview.*
           import org.mozilla.geckoview.GeckoSession.ProgressDelegate
-          class MainActivity : AppCompatActivity() {
+          import org.mozilla.geckoview.GeckoSession.NavigationDelegate
+          import org.mozilla.geckoview.GeckoSession.ContentDelegate
+          class MainActivity : BaseActivity() {
               companion object {
                   var appRuntime: GeckoRuntime? = null
-                  val GECKO_UA get() = "Mozilla/5.0 (Android ${android.os.Build.VERSION.RELEASE}" +
+                  var isDesktopMode = false
+                  val MOBILE_UA = "Mozilla/5.0 (Android ${android.os.Build.VERSION.RELEASE}" +
                       "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0"
+                  val DESKTOP_UA = "Mozilla/5.0 (X11; Linux x86_64; rv:137.0) Gecko/20100101 Firefox/137.0"
+                  val GECKO_UA get() = if (isDesktopMode) DESKTOP_UA else MOBILE_UA
               }
 
               private lateinit var runtime: GeckoRuntime
@@ -250,13 +291,29 @@ jobs:
               private lateinit var btnForward: ImageButton
               private val tabs = mutableListOf<BrowserTab>()
               private var currentTabIndex = 0
+              private lateinit var progressBar: android.widget.ProgressBar
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_main)
 
                   if (appRuntime == null) {
-                      appRuntime = GeckoRuntime.create(this)
+                      val settings = GeckoRuntimeSettings.Builder()
+                          .extensionsProcessEnabled(true)
+                          .build()
+                      appRuntime = GeckoRuntime.create(this, settings)
+                      appRuntime!!.webExtensionController.promptDelegate =
+                          object : WebExtensionController.PromptDelegate {
+                              override fun onInstallPrompt(extension: WebExtension): GeckoResult<AllowOrDeny> {
+                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                              }
+                              override fun onUpdatePrompt(
+                                  current: WebExtension, updated: WebExtension,
+                                  newPermissions: Array<out String>, newOrigins: Array<out String>
+                              ): GeckoResult<AllowOrDeny> {
+                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                              }
+                          }
                   }
                   runtime = appRuntime!!
 
@@ -274,11 +331,13 @@ jobs:
                   tabCountText  = findViewById(R.id.tab_count_text)
                   btnBack       = findViewById(R.id.btn_back)
                   btnForward    = findViewById(R.id.btn_forward)
+                  progressBar   = findViewById(R.id.progress_bar)
+
 
                   setupTabs()
                   setupUrlBar()
                   setupButtons()
-                  openNewTab("https://www.google.com")
+                  openNewTab("about:home")
               }
 
               private fun setupTabs() {
@@ -332,7 +391,7 @@ jobs:
                   // Tab-switcher tap: show/hide strip; long-press: open new tab
                   val btnTabSwitcher = findViewById<FrameLayout>(R.id.btn_new_tab)
                   btnTabSwitcher.setOnClickListener { toggleTabStrip() }
-                  btnTabSwitcher.setOnLongClickListener { openNewTab("https://www.google.com"); true }
+                  btnTabSwitcher.setOnLongClickListener { openNewTab("about:home"); true }
                   findViewById<ImageButton>(R.id.btn_menu).setOnClickListener { v -> showBrowserMenu(v) }
               }
 
@@ -353,7 +412,7 @@ jobs:
               private fun Int.dpToPx() = (this * resources.displayMetrics.density).toInt()
 
               private fun updateNavButtons() {
-                  btnBack.alpha = if (tabs.getOrNull(currentTabIndex)?.session != null) 1.0f else 0.4f
+                  btnBack.alpha = 0.4f
                   btnForward.alpha = 0.4f
               }
 
@@ -364,35 +423,89 @@ jobs:
               private fun openNewTab(url: String) {
                   val session = GeckoSession()
                   session.settings.userAgentOverride = GECKO_UA
+                  session.settings.allowJavascript = true
+                  session.settings.useTrackingProtection = false
+
                   session.progressDelegate = object : ProgressDelegate {
                       override fun onPageStart(session: GeckoSession, url: String) {
                           runOnUiThread {
-                              tabs.getOrNull(currentTabIndex)?.url = url
-                              if (!urlBar.isFocused) showDisplayUrl(url)
+                              val idx = tabs.indexOfFirst { it.session === session }
+                              if (idx >= 0) tabs[idx].url = url
+                              if (idx == currentTabIndex && !urlBar.isFocused) showDisplayUrl(url)
+                              progressBar.visibility = View.VISIBLE
+                              progressBar.progress = 10
+                          }
+                      }
+                      override fun onProgressChange(session: GeckoSession, progress: Int) {
+                          runOnUiThread {
+                              progressBar.progress = progress
+                              if (progress >= 100) {
+                                  progressBar.visibility = View.GONE
+                              }
+                          }
+                      }
+                      override fun onPageStop(session: GeckoSession, success: Boolean) {
+                          runOnUiThread { progressBar.visibility = View.GONE }
+                      }
+                      override fun onSecurityChange(session: GeckoSession, securityInfo: ProgressDelegate.SecurityInformation) {
+                          runOnUiThread {
+                              val idx = tabs.indexOfFirst { it.session === session }
+                              if (idx == currentTabIndex) {
+                                  lockIcon.visibility = if (securityInfo.isSecure) View.VISIBLE else View.GONE
+                              }
                           }
                       }
                   }
+
+                  session.navigationDelegate = object : NavigationDelegate {
+                      override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<NavigationDelegate.PermissionRequest>) {
+                          runOnUiThread {
+                              val idx = tabs.indexOfFirst { it.session === session }
+                              if (idx >= 0) tabs[idx].url = url ?: ""
+                              if (idx == currentTabIndex && !urlBar.isFocused) showDisplayUrl(url ?: "")
+                          }
+                      }
+                      override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                          runOnUiThread { btnBack.alpha = if (canGoBack) 1.0f else 0.4f }
+                      }
+                      override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                          runOnUiThread { btnForward.alpha = if (canGoForward) 1.0f else 0.4f }
+                      }
+                  }
+
+                  session.contentDelegate = object : ContentDelegate {
+                      override fun onTitleChange(session: GeckoSession, title: String?) {
+                          runOnUiThread {
+                              val idx = tabs.indexOfFirst { it.session === session }
+                              if (idx >= 0) { tabs[idx].title = title ?: ""; tabAdapter.notifyItemChanged(idx) }
+                          }
+                      }
+                      override fun onContextMenu(session: GeckoSession, screenX: Int, screenY: Int, element: ContentDelegate.ContextElement) {
+                          // Long-press context menu placeholder
+                      }
+                  }
+
                   session.open(runtime)
-                  val tab = BrowserTab(session, url)
+                  val isHome = url == "about:home"
+                  val tab = BrowserTab(session, if (isHome) "" else url)
                   tabs.add(tab)
                   tabAdapter.notifyItemInserted(tabs.size - 1)
                   switchToTab(tabs.size - 1)
                   updateTabCount()
-                  session.loadUri(url)
+                  if (isHome) showHomePage() else session.loadUri(url)
               }
 
               private fun switchToTab(index: Int) {
                   currentTabIndex = index
                   geckoView.setSession(tabs[index].session)
-                  showDisplayUrl(tabs[index].url)
-                  updateNavButtons()
-                  // Hide strip after switching
+                  if (tabs[index].url.isEmpty()) showHomePage()
+                  else showDisplayUrl(tabs[index].url)
                   tabsContainer.visibility = View.GONE
               }
 
               private fun closeTab(index: Int) {
                   if (tabs.size <= 1) {
-                      openNewTab("https://www.google.com")
+                      openNewTab("about:home")
                       tabs[0].session.close(); tabs.removeAt(0)
                       tabAdapter.notifyDataSetChanged(); updateTabCount(); return
                   }
@@ -412,17 +525,66 @@ jobs:
                   showDisplayUrl(url)
               }
 
+              private fun showHomePage() {
+                  geckoView.visibility = View.GONE
+                  var homeView = findViewById<View>(R.id.home_page)
+                  if (homeView == null) {
+                      val inflated = layoutInflater.inflate(R.layout.home_page, null)
+                      inflated.id = R.id.home_page
+                      val container = findViewById<androidx.coordinatorlayout.widget.CoordinatorLayout>(R.id.root_layout)
+                      val params = androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(
+                          android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                          android.view.ViewGroup.LayoutParams.MATCH_PARENT
+                      )
+                      params.bottomMargin = resources.getDimensionPixelSize(R.dimen.toolbar_height)
+                      container.addView(inflated, params)
+                      homeView = inflated
+                      homeView.findViewById<EditText>(R.id.home_search_bar)?.setOnEditorActionListener { v, actionId, _ ->
+                          if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
+                              val input = v.text.toString()
+                              hideHomePage()
+                              loadUrl(input)
+                              true
+                          } else false
+                      }
+                  }
+                  homeView.visibility = View.VISIBLE
+                  urlBar.setText("")
+                  lockIcon.visibility = View.GONE
+              }
+
+              private fun hideHomePage() {
+                  findViewById<View>(R.id.home_page)?.visibility = View.GONE
+                  geckoView.visibility = View.VISIBLE
+              }
+
+              private fun toggleDesktopMode() {
+                  isDesktopMode = !isDesktopMode
+                  tabs.forEach { tab ->
+                      tab.session.settings.userAgentOverride = GECKO_UA
+                      tab.session.settings.viewportMode = if (isDesktopMode)
+                          GeckoSessionSettings.VIEWPORT_MODE_DESKTOP
+                      else
+                          GeckoSessionSettings.VIEWPORT_MODE_MOBILE
+                      tab.session.reload()
+                  }
+                  Toast.makeText(this, if (isDesktopMode) "Desktop mode on" else "Mobile mode on", Toast.LENGTH_SHORT).show()
+              }
+
               private fun showBrowserMenu(anchor: View) {
                   val popup = PopupMenu(this, anchor)
                   popup.menuInflater.inflate(R.menu.browser_menu, popup.menu)
+                  popup.menu.findItem(R.id.menu_desktop_mode)?.title =
+                      if (isDesktopMode) "Mobile mode" else "Desktop mode"
                   popup.setOnMenuItemClickListener { item ->
                       when (item.itemId) {
-                          R.id.menu_new_tab        -> { openNewTab("https://www.google.com"); true }
+                          R.id.menu_new_tab        -> { openNewTab("about:home"); true }
                           R.id.menu_new_incognito  -> { openNewTab("https://www.google.com"); true }
                           R.id.menu_close_tab      -> { closeTab(currentTabIndex); true }
                           R.id.menu_refresh        -> { tabs.getOrNull(currentTabIndex)?.session?.reload(); true }
                           R.id.menu_extensions     -> { startActivity(Intent(this, ExtensionManagerActivity::class.java)); true }
                           R.id.menu_find_in_page   -> { showFindInPageHint(); true }
+                          R.id.menu_desktop_mode   -> { toggleDesktopMode(); true }
                           R.id.menu_settings       -> { showSettingsDialog(); true }
                           else -> false
                       }
@@ -442,7 +604,7 @@ jobs:
               }
           }
 
-          data class BrowserTab(val session: GeckoSession, var url: String)
+          data class BrowserTab(val session: GeckoSession, var url: String, var title: String = "")
           MAINKT
 
           # TabAdapter.kt
@@ -474,11 +636,15 @@ jobs:
               }
 
               override fun onBindViewHolder(holder: TabViewHolder, position: Int) {
-                  val url = tabs[position].url
-                  val domain = try {
-                      android.net.Uri.parse(url).host?.removePrefix("www.") ?: url.take(20)
-                  } catch (e: Exception) { url.take(20) }
-                  holder.tabTitle.text = domain
+                  val tab = tabs[position]
+                  val label = when {
+                      tab.title.isNotEmpty() -> tab.title
+                      tab.url.isNotEmpty() -> try {
+                          android.net.Uri.parse(tab.url).host?.removePrefix("www.") ?: tab.url.take(20)
+                      } catch (e: Exception) { tab.url.take(20) }
+                      else -> "New Tab"
+                  }
+                  holder.tabTitle.text = label
                   holder.itemView.setOnClickListener { onTabClick(position) }
                   holder.btnClose.setOnClickListener { onTabClose(position) }
               }
@@ -504,7 +670,7 @@ jobs:
           import java.io.FileOutputStream
           import java.util.zip.ZipInputStream
 
-          class ExtensionManagerActivity : AppCompatActivity() {
+          class ExtensionManagerActivity : BaseActivity() {
 
               companion object {
                   const val PICK_EXTENSION = 1001
@@ -788,9 +954,10 @@ jobs:
           <androidx.coordinatorlayout.widget.CoordinatorLayout
               xmlns:android="http://schemas.android.com/apk/res/android"
               xmlns:app="http://schemas.android.com/apk/res-auto"
+              android:id="@+id/root_layout"
               android:layout_width="match_parent"
               android:layout_height="match_parent"
-              android:fitsSystemWindows="true"
+              android:fitsSystemWindows="false"
               android:background="#202124">
 
               <!-- Web content — full screen, toolbar overlays at bottom -->
@@ -809,6 +976,18 @@ jobs:
                   android:layout_gravity="bottom"
                   android:background="#202124"
                   android:elevation="4dp">
+
+                  <!-- Loading progress bar -->
+                  <ProgressBar
+                      android:id="@+id/progress_bar"
+                      style="?android:attr/progressBarStyleHorizontal"
+                      android:layout_width="match_parent"
+                      android:layout_height="3dp"
+                      android:max="100"
+                      android:progress="0"
+                      android:progressTint="#1A73E8"
+                      android:progressBackgroundTint="#3C4043"
+                      android:visibility="gone"/>
 
                   <!-- Thin divider -->
                   <View
@@ -1004,6 +1183,7 @@ jobs:
 
               <!-- Toolbar -->
               <LinearLayout
+                  android:id="@+id/toolbar_ext"
                   android:layout_width="match_parent"
                   android:layout_height="56dp"
                   android:orientation="horizontal"
@@ -1095,6 +1275,7 @@ jobs:
               <item android:id="@+id/menu_new_incognito" android:title="New Incognito tab"/>
               <item android:id="@+id/menu_refresh"       android:title="Refresh"/>
               <item android:id="@+id/menu_close_tab"     android:title="Close tab"/>
+              <item android:id="@+id/menu_desktop_mode"  android:title="Desktop mode"/>
               <item android:id="@+id/menu_extensions"    android:title="Extensions"/>
               <item android:id="@+id/menu_find_in_page"  android:title="Find in page"/>
               <item android:id="@+id/menu_settings"      android:title="Settings"/>
@@ -1102,6 +1283,132 @@ jobs:
           MENUXML
 
           # themes and colors - Chrome dark theme
+          # dimens.xml
+          cat > app/src/main/res/values/dimens.xml << 'DIMENS'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <dimen name="toolbar_height">56dp</dimen>
+          </resources>
+          DIMENS
+
+          # home_page.xml
+          cat > app/src/main/res/layout/home_page.xml << 'HOMEXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical"
+              android:gravity="center_horizontal"
+              android:background="#202124"
+              android:paddingTop="80dp"
+              android:paddingStart="24dp"
+              android:paddingEnd="24dp">
+
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="Personal Browser"
+                  android:textColor="#E8EAED"
+                  android:textSize="28sp"
+                  android:textStyle="bold"
+                  android:layout_marginBottom="8dp"/>
+
+              <TextView
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:text="Powered by GeckoView"
+                  android:textColor="#9AA0A6"
+                  android:textSize="13sp"
+                  android:layout_marginBottom="40dp"/>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="52dp"
+                  android:background="@drawable/url_bar_bg"
+                  android:orientation="horizontal"
+                  android:gravity="center_vertical"
+                  android:paddingStart="16dp"
+                  android:paddingEnd="16dp">
+
+                  <ImageView
+                      android:layout_width="20dp"
+                      android:layout_height="20dp"
+                      android:src="@drawable/ic_more_vert"
+                      android:alpha="0.6"
+                      android:layout_marginEnd="10dp"/>
+
+                  <EditText
+                      android:id="@+id/home_search_bar"
+                      android:layout_width="0dp"
+                      android:layout_height="match_parent"
+                      android:layout_weight="1"
+                      android:background="@null"
+                      android:hint="Search or type URL"
+                      android:textColor="#E8EAED"
+                      android:textColorHint="#9AA0A6"
+                      android:textSize="15sp"
+                      android:imeOptions="actionGo"
+                      android:inputType="textUri|textNoSuggestions"
+                      android:singleLine="true"/>
+
+              </LinearLayout>
+
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal"
+                  android:layout_marginTop="32dp"
+                  android:gravity="center">
+
+                  <LinearLayout
+                      android:layout_width="72dp"
+                      android:layout_height="72dp"
+                      android:orientation="vertical"
+                      android:gravity="center"
+                      android:background="@drawable/tab_item_bg"
+                      android:layout_marginEnd="16dp"
+                      android:clickable="true"
+                      android:focusable="true">
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="G" android:textColor="#4285F4" android:textSize="24sp" android:textStyle="bold"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Google" android:textColor="#9AA0A6" android:textSize="10sp"/>
+                  </LinearLayout>
+
+                  <LinearLayout
+                      android:layout_width="72dp"
+                      android:layout_height="72dp"
+                      android:orientation="vertical"
+                      android:gravity="center"
+                      android:background="@drawable/tab_item_bg"
+                      android:layout_marginEnd="16dp"
+                      android:clickable="true"
+                      android:focusable="true">
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="YT" android:textColor="#FF0000" android:textSize="20sp" android:textStyle="bold"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="YouTube" android:textColor="#9AA0A6" android:textSize="10sp"/>
+                  </LinearLayout>
+
+                  <LinearLayout
+                      android:layout_width="72dp"
+                      android:layout_height="72dp"
+                      android:orientation="vertical"
+                      android:gravity="center"
+                      android:background="@drawable/tab_item_bg"
+                      android:clickable="true"
+                      android:focusable="true">
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="W" android:textColor="#A0A0A0" android:textSize="24sp" android:textStyle="bold"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Wikipedia" android:textColor="#9AA0A6" android:textSize="10sp"/>
+                  </LinearLayout>
+
+              </LinearLayout>
+
+          </LinearLayout>
+          HOMEXML
+
           cat > app/src/main/res/values/themes.xml << 'THEMES'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
