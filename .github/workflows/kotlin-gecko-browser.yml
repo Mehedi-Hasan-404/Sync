@@ -309,16 +309,21 @@ jobs:
                       // Auto-approve installs and updates
                       appRuntime!!.webExtensionController.promptDelegate =
                           object : WebExtensionController.PromptDelegate {
-                              override fun onInstallPrompt(extension: WebExtension): GeckoResult<AllowOrDeny> =
-                                  GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                              override fun onInstallPrompt(
+                                  extension: WebExtension,
+                                  response: WebExtensionController.PromptDelegate.InstallPromptResponse
+                              ) { response.confirm() }
                               override fun onUpdatePrompt(
-                                  current: WebExtension, updated: WebExtension,
-                                  newPermissions: Array<out String>, newOrigins: Array<out String>
-                              ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                                  current: WebExtension,
+                                  updated: WebExtension,
+                                  newPermissions: Array<out String>,
+                                  newOrigins: Array<out String>,
+                                  response: WebExtensionController.PromptDelegate.UpdatePromptResponse
+                              ) { response.confirm() }
                           }
 
                       // TabDelegate — lets extensions open/close/update tabs
-                      appRuntime!!.webExtensionController.tabDelegate =
+                      appRuntime!!.webExtensionController.setTabDelegate(
                           object : WebExtensionController.TabDelegate {
                               override fun onNewTab(
                                   source: WebExtension?, details: WebExtension.CreateTabDetails
@@ -350,6 +355,7 @@ jobs:
                                   return GeckoResult.fromValue(AllowOrDeny.ALLOW)
                               }
                           }
+                      )
                   }
                   runtime = appRuntime!!
 
@@ -479,26 +485,30 @@ jobs:
               }
 
               private fun wireExtensionToSession(ext: WebExtension, session: GeckoSession) {
-                  // ActionDelegate — handles browser action badge/icon/popup for this session
-                  ext.setActionDelegate(session, object : ActionDelegate {
+                  // ActionDelegate — per-extension, handles badge/icon/popup clicks
+                  // In GeckoView 136 setActionDelegate takes only the delegate (no session param)
+                  ext.setActionDelegate(object : ActionDelegate {
                       override fun onBrowserAction(extension: WebExtension, s: GeckoSession?, action: Action) {
                           runOnUiThread { updateExtensionBadge(extension.id, action) }
                       }
                       override fun onTogglePopup(extension: WebExtension, action: Action): GeckoResult<GeckoSession>? {
-                          // Open extension popup in a floating WebView dialog
                           val popupSession = GeckoSession()
-                          runOnUiThread { showExtensionPopup(extension, popupSession, action.title ?: extension.metaData?.name ?: "Extension") }
+                          runOnUiThread {
+                              showExtensionPopup(extension, popupSession,
+                                  action.title ?: extension.metaData?.name ?: "Extension")
+                          }
                           return GeckoResult.fromValue(popupSession)
                       }
                   })
 
                   // MessageDelegate — background <-> content script messaging
-                  ext.setMessageDelegate(session, object : MessageDelegate {
+                  // setMessageDelegate(delegate, nativeApp) — no session param in GeckoView 136
+                  ext.setMessageDelegate(object : MessageDelegate {
                       override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
-                          return null // pass-through; extensions handle their own messaging
+                          return null // pass-through; extensions handle their own logic
                       }
                       override fun onConnect(port: WebExtension.Port) {
-                          // Long-lived port — store if needed for later messaging
+                          // Long-lived port — store if needed for back-messaging
                       }
                   }, "browser")
               }
@@ -568,7 +578,7 @@ jobs:
                   }
 
                   session.navigationDelegate = object : NavigationDelegate {
-                      override fun onLocationChange(session: GeckoSession, url: String?, perms: MutableList<NavigationDelegate.PermissionRequest>) {
+                      override fun onLocationChange(session: GeckoSession, url: String?, hasUserGesture: Boolean) {
                           runOnUiThread {
                               val idx = tabs.indexOfFirst { it.session === session }
                               if (idx >= 0) tabs[idx].url = url ?: ""
@@ -646,19 +656,22 @@ jobs:
                   showDisplayUrl(url)
               }
 
+              private val HOME_PAGE_TAG = "home_page_view"
+
               private fun showHomePage() {
                   geckoView.visibility = View.GONE
-                  var homeView = findViewById<View>(R.id.home_page)
+                  val container = findViewById<androidx.coordinatorlayout.widget.CoordinatorLayout>(R.id.root_layout)
+                  var homeView = container.findViewWithTag<View>(HOME_PAGE_TAG)
                   if (homeView == null) {
-                      val inflated = layoutInflater.inflate(R.layout.home_page, null)
-                      inflated.id = R.id.home_page
-                      val container = findViewById<androidx.coordinatorlayout.widget.CoordinatorLayout>(R.id.root_layout)
+                      val inflated = layoutInflater.inflate(R.layout.home_page, container, false)
+                      inflated.tag = HOME_PAGE_TAG
                       val params = androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(
                           android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                           android.view.ViewGroup.LayoutParams.MATCH_PARENT
                       )
                       params.bottomMargin = resources.getDimensionPixelSize(R.dimen.toolbar_height)
-                      container.addView(inflated, params)
+                      inflated.layoutParams = params
+                      container.addView(inflated)
                       homeView = inflated
                       homeView.findViewById<EditText>(R.id.home_search_bar)?.setOnEditorActionListener { v, actionId, _ ->
                           if (actionId == EditorInfo.IME_ACTION_GO || actionId == EditorInfo.IME_ACTION_DONE) {
@@ -675,7 +688,8 @@ jobs:
               }
 
               private fun hideHomePage() {
-                  findViewById<View>(R.id.home_page)?.visibility = View.GONE
+                  val container = findViewById<androidx.coordinatorlayout.widget.CoordinatorLayout>(R.id.root_layout)
+                  container.findViewWithTag<View>(HOME_PAGE_TAG)?.visibility = View.GONE
                   geckoView.visibility = View.VISIBLE
               }
 
@@ -869,7 +883,7 @@ jobs:
                   val rt = MainActivity.appRuntime ?: return
                   AlertDialog.Builder(this)
                       .setTitle("Uninstall")
-                      .setMessage("Remove "${ext.metaData?.name ?: ext.id}"?")
+                      .setMessage("Remove \"${ext.metaData?.name ?: ext.id}\"?")
                       .setPositiveButton("Remove") { _, _ ->
                           rt.webExtensionController.uninstall(ext).accept({
                               runOnUiThread {
