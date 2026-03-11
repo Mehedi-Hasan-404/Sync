@@ -323,14 +323,15 @@ jobs:
                       AppRuntime.runtime.getWebExtensionController().setPromptDelegate(
                           new WebExtensionController.PromptDelegate() {
                               @Override
-                              public GeckoResult<AllowOrDeny> onInstallPrompt(WebExtension extension) {
-                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+                              public void onInstallPrompt(WebExtension extension,
+                                      WebExtensionController.PromptDelegate.InstallPromptResponse response) {
+                                  response.confirm();
                               }
                               @Override
-                              public GeckoResult<AllowOrDeny> onUpdatePrompt(
-                                  WebExtension current, WebExtension updated,
-                                  String[] newPermissions, String[] newOrigins) {
-                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+                              public void onUpdatePrompt(WebExtension current, WebExtension updated,
+                                      String[] newPermissions, String[] newOrigins,
+                                      WebExtensionController.PromptDelegate.UpdatePromptResponse response) {
+                                  response.confirm();
                               }
                           }
                       );
@@ -501,8 +502,8 @@ jobs:
               }
 
               private void wireExtensionToSession(WebExtension ext, GeckoSession session) {
-                  // ActionDelegate — handles browser action badge/icon/popup per session
-                  ext.setActionDelegate(session, new WebExtension.ActionDelegate() {
+                  // ActionDelegate — GeckoView 136: no session param, set on extension directly
+                  ext.setActionDelegate(new WebExtension.ActionDelegate() {
                       @Override
                       public void onBrowserAction(WebExtension extension, GeckoSession s, WebExtension.Action action) {
                           runOnUiThread(() -> updateExtensionBadge(extension.id, action));
@@ -517,16 +518,16 @@ jobs:
                       }
                   });
 
-                  // MessageDelegate — background <-> content script message passing
-                  ext.setMessageDelegate(session, new WebExtension.MessageDelegate() {
+                  // MessageDelegate — GeckoView 136: (delegate, nativeApp) — no session param
+                  ext.setMessageDelegate(new WebExtension.MessageDelegate() {
                       @Override
                       public GeckoResult<Object> onMessage(String nativeApp, Object message,
                               WebExtension.MessageSender sender) {
-                          return null; // pass-through; extensions handle their own logic
+                          return null; // pass-through
                       }
                       @Override
                       public void onConnect(WebExtension.Port port) {
-                          // Long-lived messaging port — store if you need to send messages back
+                          // Long-lived port — store if needed
                       }
                   }, "browser");
               }
@@ -605,8 +606,7 @@ jobs:
 
                   session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
                       @Override
-                      public void onLocationChange(@NonNull GeckoSession s, String u,
-                              @NonNull java.util.List<GeckoSession.NavigationDelegate.PermissionRequest> p) {
+                      public void onLocationChange(@NonNull GeckoSession s, String u, boolean hasUserGesture) {
                           runOnUiThread(() -> {
                               int idx = indexOfSession(s);
                               if (idx >= 0) tabs.get(idx).setUrl(u != null ? u : "");
@@ -702,20 +702,23 @@ jobs:
                   showDisplayUrl(url);
               }
 
+              private static final String HOME_PAGE_TAG = "home_page_view";
+
               private void showHomePage() {
                   geckoView.setVisibility(View.GONE);
-                  android.view.View homeView = findViewById(R.id.home_page);
+                  androidx.coordinatorlayout.widget.CoordinatorLayout container = findViewById(R.id.root_layout);
+                  android.view.View homeView = container.findViewWithTag(HOME_PAGE_TAG);
                   if (homeView == null) {
-                      android.view.View inflated = getLayoutInflater().inflate(R.layout.home_page, null);
-                      inflated.setId(R.id.home_page);
-                      androidx.coordinatorlayout.widget.CoordinatorLayout container = findViewById(R.id.root_layout);
+                      android.view.View inflated = getLayoutInflater().inflate(R.layout.home_page, container, false);
+                      inflated.setTag(HOME_PAGE_TAG);
                       androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams params =
                           new androidx.coordinatorlayout.widget.CoordinatorLayout.LayoutParams(
                               android.view.ViewGroup.LayoutParams.MATCH_PARENT,
                               android.view.ViewGroup.LayoutParams.MATCH_PARENT);
                       int tb = getResources().getDimensionPixelSize(R.dimen.toolbar_height);
                       params.bottomMargin = tb;
-                      container.addView(inflated, params);
+                      inflated.setLayoutParams(params);
+                      container.addView(inflated);
                       homeView = inflated;
                       EditText homeSearch = homeView.findViewById(R.id.home_search_bar);
                       if (homeSearch != null) {
@@ -737,7 +740,8 @@ jobs:
               }
 
               private void hideHomePage() {
-                  android.view.View homeView = findViewById(R.id.home_page);
+                  androidx.coordinatorlayout.widget.CoordinatorLayout container = findViewById(R.id.root_layout);
+                  android.view.View homeView = container.findViewWithTag(HOME_PAGE_TAG);
                   if (homeView != null) homeView.setVisibility(View.GONE);
                   geckoView.setVisibility(View.VISIBLE);
               }
@@ -1000,7 +1004,7 @@ jobs:
                   String name = (ext.metaData != null && ext.metaData.name != null) ? ext.metaData.name : ext.id;
                   new AlertDialog.Builder(this)
                       .setTitle("Uninstall extension")
-                      .setMessage("Remove "" + name + ""?")
+                      .setMessage("Remove \"" + name + "\"?")
                       .setPositiveButton("Remove", (d, w) -> {
                           GeckoRuntime rt = AppRuntime.runtime;
                           if (rt == null) return;
