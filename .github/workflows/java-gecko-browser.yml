@@ -281,6 +281,7 @@ jobs:
           import org.mozilla.geckoview.GeckoView;
           import org.mozilla.geckoview.WebExtension;
           import org.mozilla.geckoview.WebExtensionController;
+          import org.mozilla.geckoview.GeckoView;
 
           import java.util.ArrayList;
           import java.util.List;
@@ -317,6 +318,8 @@ jobs:
                           .extensionsProcessEnabled(true)
                           .build();
                       AppRuntime.runtime = GeckoRuntime.create(this, settings);
+
+                      // Auto-approve all install and update prompts
                       AppRuntime.runtime.getWebExtensionController().setPromptDelegate(
                           new WebExtensionController.PromptDelegate() {
                               @Override
@@ -331,8 +334,51 @@ jobs:
                               }
                           }
                       );
+
+                      // TabDelegate — allows extensions to open, close and update tabs
+                      AppRuntime.runtime.getWebExtensionController().setTabDelegate(
+                          new WebExtensionController.TabDelegate() {
+                              @Override
+                              public GeckoResult<GeckoSession> onNewTab(
+                                      WebExtension source, WebExtension.CreateTabDetails details) {
+                                  GeckoSession newSession = new GeckoSession();
+                                  String url = details.url != null ? details.url : "about:blank";
+                                  runOnUiThread(() -> addExtensionTab(newSession, url));
+                                  return GeckoResult.fromValue(newSession);
+                              }
+                              @Override
+                              public GeckoResult<AllowOrDeny> onCloseTab(
+                                      WebExtension source, GeckoSession session) {
+                                  runOnUiThread(() -> {
+                                      int idx = indexOfSession(session);
+                                      if (idx >= 0) closeTab(idx);
+                                  });
+                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+                              }
+                              @Override
+                              public GeckoResult<AllowOrDeny> onUpdateTab(
+                                      WebExtension source, GeckoSession session,
+                                      WebExtension.UpdateTabDetails details) {
+                                  runOnUiThread(() -> {
+                                      int idx = indexOfSession(session);
+                                      if (idx >= 0 && details.url != null) {
+                                          tabs.get(idx).getSession().loadUri(details.url);
+                                          if (Boolean.TRUE.equals(details.active)) switchToTab(idx);
+                                      }
+                                  });
+                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW);
+                              }
+                          }
+                      );
                   }
-                  runtime      = AppRuntime.runtime;
+                  runtime = AppRuntime.runtime;
+
+                  // Re-enable all previously installed extensions on startup
+                  runtime.getWebExtensionController().list().accept(extensions -> {
+                      if (extensions != null) {
+                          for (WebExtension ext : extensions) enableExtensionOnAllSessions(ext);
+                      }
+                  });
 
                   // Install native crash handler and log ABI info
                   String crashLog = getFilesDir().getAbsolutePath() + "/crash.log";
@@ -354,7 +400,7 @@ jobs:
                   setupTabs();
                   setupUrlBar();
                   setupButtons();
-                  openNewTab("https://www.google.com");
+                  openNewTab("about:home");
               }
 
               private void setupTabs() {
@@ -437,6 +483,81 @@ jobs:
                   tabCountText.setText(String.valueOf(Math.min(tabs.size(), 99)));
               }
 
+              // Called by TabDelegate when an extension opens a new tab
+              private void addExtensionTab(GeckoSession session, String url) {
+                  setupSessionDelegates(session);
+                  session.open(runtime);
+                  BrowserTab tab = new BrowserTab(session, url);
+                  tabs.add(tab);
+                  tabAdapter.notifyItemInserted(tabs.size() - 1);
+                  switchToTab(tabs.size() - 1);
+                  updateTabCount();
+                  session.loadUri(url);
+              }
+
+              // Wire ActionDelegate + MessageDelegate for all sessions when extension is installed/restored
+              private void enableExtensionOnAllSessions(WebExtension ext) {
+                  for (BrowserTab tab : tabs) wireExtensionToSession(ext, tab.getSession());
+              }
+
+              private void wireExtensionToSession(WebExtension ext, GeckoSession session) {
+                  // ActionDelegate — handles browser action badge/icon/popup per session
+                  ext.setActionDelegate(session, new WebExtension.ActionDelegate() {
+                      @Override
+                      public void onBrowserAction(WebExtension extension, GeckoSession s, WebExtension.Action action) {
+                          runOnUiThread(() -> updateExtensionBadge(extension.id, action));
+                      }
+                      @Override
+                      public GeckoResult<GeckoSession> onTogglePopup(WebExtension extension, WebExtension.Action action) {
+                          GeckoSession popupSession = new GeckoSession();
+                          String title = action.title != null ? action.title
+                              : (extension.metaData != null ? extension.metaData.name : "Extension");
+                          runOnUiThread(() -> showExtensionPopup(popupSession, title));
+                          return GeckoResult.fromValue(popupSession);
+                      }
+                  });
+
+                  // MessageDelegate — background <-> content script message passing
+                  ext.setMessageDelegate(session, new WebExtension.MessageDelegate() {
+                      @Override
+                      public GeckoResult<Object> onMessage(String nativeApp, Object message,
+                              WebExtension.MessageSender sender) {
+                          return null; // pass-through; extensions handle their own logic
+                      }
+                      @Override
+                      public void onConnect(WebExtension.Port port) {
+                          // Long-lived messaging port — store if you need to send messages back
+                      }
+                  }, "browser");
+              }
+
+              private void updateExtensionBadge(String extId, WebExtension.Action action) {
+                  String badge = action.badgeText;
+                  if (badge != null && !badge.isEmpty()) {
+                      android.util.Log.d("ExtBadge", "Extension " + extId + " badge: " + badge);
+                  }
+              }
+
+              private void showExtensionPopup(GeckoSession popupSession, String title) {
+                  AlertDialog.Builder builder = new AlertDialog.Builder(this);
+                  builder.setTitle(title);
+
+                  GeckoView popupView = new GeckoView(this);
+                  popupSession.open(runtime);
+                  popupView.setSession(popupSession);
+                  builder.setView(popupView);
+                  builder.setOnDismissListener(d -> popupSession.close());
+
+                  AlertDialog dialog = builder.create();
+                  dialog.show();
+                  if (dialog.getWindow() != null) {
+                      dialog.getWindow().setLayout(
+                          (int)(getResources().getDisplayMetrics().widthPixels * 0.9),
+                          (int)(getResources().getDisplayMetrics().heightPixels * 0.7)
+                      );
+                  }
+              }
+
               private static final String GECKO_UA =
                   "Mozilla/5.0 (Android " + android.os.Build.VERSION.RELEASE +
                   "; Mobile; rv:137.0) Gecko/137.0 Firefox/137.0";
@@ -445,8 +566,7 @@ jobs:
                   return isDesktopMode ? DESKTOP_UA : MOBILE_UA;
               }
 
-              private void openNewTab(String url) {
-                  GeckoSession session = new GeckoSession();
+              private void setupSessionDelegates(GeckoSession session) {
                   session.getSettings().setUserAgentOverride(getGeckoUA());
                   session.getSettings().setAllowJavascript(true);
                   session.getSettings().setUseTrackingProtection(false);
@@ -513,7 +633,20 @@ jobs:
                       }
                   });
 
+              }
+
+              private void openNewTab(String url) {
+                  GeckoSession session = new GeckoSession();
+                  setupSessionDelegates(session);
                   session.open(runtime);
+
+                  // Wire all already-installed extensions to this new session
+                  runtime.getWebExtensionController().list().accept(extensions -> {
+                      if (extensions != null) {
+                          for (WebExtension ext : extensions) wireExtensionToSession(ext, session);
+                      }
+                  });
+
                   boolean isHome = "about:home".equals(url);
                   BrowserTab tab = new BrowserTab(session, isHome ? "" : url);
                   tabs.add(tab);
@@ -804,50 +937,90 @@ jobs:
 
               private static final int PICK_EXTENSION = 1001;
 
-              private android.widget.ListView extensionList;
-              private final List<String> installedExtensions = new ArrayList<>();
-              private ArrayAdapter<String> adapter;
+              // Holds live WebExtension objects — GeckoView is the source of truth
+              private final List<WebExtension> installedExtensions = new ArrayList<>();
+              private ExtensionAdapter extAdapter;
 
               @Override
               protected void onCreate(Bundle savedInstanceState) {
                   super.onCreate(savedInstanceState);
                   setContentView(R.layout.activity_extension_manager);
 
-                  ImageButton btnBackExt = findViewById(R.id.btn_back_ext);
-                  btnBackExt.setOnClickListener(v -> finish());
+                  findViewById(R.id.btn_back_ext).setOnClickListener(v -> finish());
 
-                  extensionList = findViewById(R.id.extension_list);
-                  adapter = new ArrayAdapter<>(this, android.R.layout.simple_list_item_1, installedExtensions);
-                  extensionList.setAdapter(adapter);
+                  RecyclerView recycler = findViewById(R.id.extension_list);
+                  extAdapter = new ExtensionAdapter();
+                  recycler.setLayoutManager(new LinearLayoutManager(this));
+                  recycler.setAdapter(extAdapter);
 
                   loadInstalledExtensions();
 
-                  Button btnFromFile = findViewById(R.id.btn_install_from_file);
-                  Button btnFromUrl = findViewById(R.id.btn_install_from_url);
-
-                  btnFromFile.setOnClickListener(v -> {
+                  findViewById(R.id.btn_install_from_file).setOnClickListener(v -> {
                       Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
                       intent.setType("*/*");
                       intent.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{
-                          "application/zip",
-                          "application/x-zip-compressed",
-                          "application/octet-stream",
-                          "application/x-xpinstall"
+                          "application/zip", "application/x-zip-compressed",
+                          "application/octet-stream", "application/x-xpinstall"
                       });
                       startActivityForResult(intent, PICK_EXTENSION);
                   });
-
-                  btnFromUrl.setOnClickListener(v -> showUrlInstallDialog());
+                  findViewById(R.id.btn_install_from_url).setOnClickListener(v -> showUrlInstallDialog());
               }
 
+              // Query GeckoView directly — never rely on a local file scan
               private void loadInstalledExtensions() {
-                  File extDir = new File(getFilesDir(), "extensions");
-                  if (extDir.exists() && extDir.listFiles() != null) {
-                      for (File f : extDir.listFiles()) {
-                          installedExtensions.add(f.getName());
+                  GeckoRuntime rt = AppRuntime.runtime;
+                  if (rt == null) return;
+                  rt.getWebExtensionController().list().accept(extensions -> runOnUiThread(() -> {
+                      installedExtensions.clear();
+                      if (extensions != null) installedExtensions.addAll(extensions);
+                      extAdapter.notifyDataSetChanged();
+                  }));
+              }
+
+              private void toggleExtension(WebExtension ext, boolean enable) {
+                  GeckoRuntime rt = AppRuntime.runtime;
+                  if (rt == null) return;
+                  GeckoResult<WebExtension> op = enable
+                      ? rt.getWebExtensionController().enable(ext, WebExtension.Flags.NONE)
+                      : rt.getWebExtensionController().disable(ext, WebExtension.Flags.NONE);
+                  op.accept(updated -> runOnUiThread(() -> {
+                      int idx = indexOfExt(ext.id);
+                      if (idx >= 0 && updated != null) {
+                          installedExtensions.set(idx, updated);
+                          extAdapter.notifyItemChanged(idx);
                       }
-                      adapter.notifyDataSetChanged();
-                  }
+                      Toast.makeText(this, enable ? "Enabled" : "Disabled", Toast.LENGTH_SHORT).show();
+                  }), err -> runOnUiThread(() ->
+                      Toast.makeText(this, "Failed: " + (err != null ? err.getMessage() : "?"), Toast.LENGTH_SHORT).show()
+                  ));
+              }
+
+              private void confirmUninstall(WebExtension ext) {
+                  String name = (ext.metaData != null && ext.metaData.name != null) ? ext.metaData.name : ext.id;
+                  new AlertDialog.Builder(this)
+                      .setTitle("Uninstall extension")
+                      .setMessage("Remove "" + name + ""?")
+                      .setPositiveButton("Remove", (d, w) -> {
+                          GeckoRuntime rt = AppRuntime.runtime;
+                          if (rt == null) return;
+                          rt.getWebExtensionController().uninstall(ext).accept(v -> runOnUiThread(() -> {
+                              int idx = indexOfExt(ext.id);
+                              if (idx >= 0) { installedExtensions.remove(idx); extAdapter.notifyItemRemoved(idx); }
+                              // Clean up any extracted files
+                              new File(getFilesDir(), "extensions/" + ext.id).delete();
+                              Toast.makeText(this, "Uninstalled", Toast.LENGTH_SHORT).show();
+                          }), err -> runOnUiThread(() ->
+                              Toast.makeText(this, "Failed: " + (err != null ? err.getMessage() : "?"), Toast.LENGTH_SHORT).show()
+                          ));
+                      })
+                      .setNegativeButton("Cancel", null).show();
+              }
+
+              private int indexOfExt(String id) {
+                  for (int i = 0; i < installedExtensions.size(); i++)
+                      if (installedExtensions.get(i).id.equals(id)) return i;
+                  return -1;
               }
 
               @Override
@@ -860,6 +1033,8 @@ jobs:
               }
 
               private void installExtensionFromUri(Uri uri) {
+                  GeckoRuntime rt = AppRuntime.runtime;
+                  if (rt == null) return;
                   new Thread(() -> {
                       try {
                           String fileName = getFileName(uri);
@@ -870,39 +1045,32 @@ jobs:
 
                           InputStream is = getContentResolver().openInputStream(uri);
                           if (is == null) return;
-
                           ZipInputStream zip = new ZipInputStream(is);
                           ZipEntry entry;
                           while ((entry = zip.getNextEntry()) != null) {
                               File outFile = new File(extDir, entry.getName());
-                              if (entry.isDirectory()) {
-                                  outFile.mkdirs();
-                              } else {
-                                  outFile.getParentFile().mkdirs();
+                              if (entry.isDirectory()) outFile.mkdirs();
+                              else {
+                                  if (outFile.getParentFile() != null) outFile.getParentFile().mkdirs();
                                   FileOutputStream fos = new FileOutputStream(outFile);
-                                  byte[] buffer = new byte[4096];
-                                  int len;
-                                  while ((len = zip.read(buffer)) != -1) fos.write(buffer, 0, len);
+                                  byte[] buf = new byte[4096]; int len;
+                                  while ((len = zip.read(buf)) != -1) fos.write(buf, 0, len);
                                   fos.close();
                               }
                               zip.closeEntry();
                           }
                           zip.close();
 
-                          GeckoRuntime runtime = AppRuntime.runtime;
-                          String extUri = "file://" + extDir.getAbsolutePath() + "/";
-
-                          runtime.getWebExtensionController().install(extUri)
+                          rt.getWebExtensionController()
+                              .install("file://" + extDir.getAbsolutePath() + "/")
                               .accept(ext -> runOnUiThread(() -> {
-                                  installedExtensions.add(ext != null ? ext.id : extName);
-                                  adapter.notifyDataSetChanged();
+                                  if (ext != null) { installedExtensions.add(ext); extAdapter.notifyItemInserted(installedExtensions.size() - 1); }
                                   Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show();
-                              }), throwable -> runOnUiThread(() ->
-                                  Toast.makeText(this, "Install failed: " + (throwable != null ? throwable.getMessage() : "unknown"), Toast.LENGTH_LONG).show()
+                              }), err -> runOnUiThread(() ->
+                                  Toast.makeText(this, "Install failed: " + (err != null ? err.getMessage() : "?"), Toast.LENGTH_LONG).show()
                               ));
                       } catch (Exception e) {
-                          runOnUiThread(() ->
-                              Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show());
+                          runOnUiThread(() -> Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show());
                       }
                   }).start();
               }
@@ -911,24 +1079,22 @@ jobs:
                   EditText input = new EditText(this);
                   input.setHint("https://addons.mozilla.org/...");
                   new AlertDialog.Builder(this)
-                      .setTitle("Install Extension from URL")
+                      .setTitle("Install from URL")
                       .setView(input)
-                      .setPositiveButton("Install", (dialog, which) -> {
+                      .setPositiveButton("Install", (d, w) -> {
                           String url = input.getText().toString().trim();
-                          if (!url.isEmpty()) {
-                              GeckoRuntime runtime = AppRuntime.runtime;
-                              runtime.getWebExtensionController().install(url)
-                                  .accept(ext -> runOnUiThread(() -> {
-                                      installedExtensions.add(ext != null ? ext.id : url);
-                                      adapter.notifyDataSetChanged();
-                                      Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show();
-                                  }), throwable -> runOnUiThread(() ->
-                                      Toast.makeText(this, "Failed: " + (throwable != null ? throwable.getMessage() : "unknown"), Toast.LENGTH_LONG).show()
-                                  ));
-                          }
+                          if (url.isEmpty()) return;
+                          GeckoRuntime rt = AppRuntime.runtime;
+                          if (rt == null) return;
+                          rt.getWebExtensionController().install(url)
+                              .accept(ext -> runOnUiThread(() -> {
+                                  if (ext != null) { installedExtensions.add(ext); extAdapter.notifyItemInserted(installedExtensions.size() - 1); }
+                                  Toast.makeText(this, "Installed!", Toast.LENGTH_SHORT).show();
+                              }), err -> runOnUiThread(() ->
+                                  Toast.makeText(this, "Failed: " + (err != null ? err.getMessage() : "?"), Toast.LENGTH_LONG).show()
+                              ));
                       })
-                      .setNegativeButton("Cancel", null)
-                      .show();
+                      .setNegativeButton("Cancel", null).show();
               }
 
               private String getFileName(Uri uri) {
@@ -937,8 +1103,48 @@ jobs:
                           int idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
                           return idx >= 0 ? cursor.getString(idx) : null;
                       }
-                  }
+                  } catch (Exception ignored) {}
                   return null;
+              }
+
+              // ── RecyclerView adapter ────────────────────────────────────────
+              private class ExtensionAdapter extends RecyclerView.Adapter<ExtensionAdapter.VH> {
+
+                  class VH extends RecyclerView.ViewHolder {
+                      TextView name, extId;
+                      android.widget.Switch toggle;
+                      ImageButton btnRemove;
+                      VH(View v) {
+                          super(v);
+                          name = v.findViewById(R.id.ext_name);
+                          extId = v.findViewById(R.id.ext_id);
+                          toggle = v.findViewById(R.id.ext_toggle);
+                          btnRemove = v.findViewById(R.id.ext_remove);
+                      }
+                  }
+
+                  @Override
+                  public VH onCreateViewHolder(ViewGroup parent, int viewType) {
+                      View v = LayoutInflater.from(parent.getContext())
+                          .inflate(R.layout.item_extension, parent, false);
+                      return new VH(v);
+                  }
+
+                  @Override
+                  public int getItemCount() { return installedExtensions.size(); }
+
+                  @Override
+                  public void onBindViewHolder(VH holder, int position) {
+                      WebExtension ext = installedExtensions.get(position);
+                      String displayName = (ext.metaData != null && ext.metaData.name != null)
+                          ? ext.metaData.name : ext.id;
+                      holder.name.setText(displayName);
+                      holder.extId.setText(ext.id);
+                      holder.toggle.setOnCheckedChangeListener(null);
+                      holder.toggle.setChecked(ext.metaData == null || ext.metaData.enabled);
+                      holder.toggle.setOnCheckedChangeListener((btn, checked) -> toggleExtension(ext, checked));
+                      holder.btnRemove.setOnClickListener(v -> confirmUninstall(ext));
+                  }
               }
           }
           EXTJAVA
@@ -1264,6 +1470,64 @@ jobs:
           </shape>
           TABITEMBG2
 
+          # item_extension.xml — single row in extension list
+          cat > app/src/main/res/layout/item_extension.xml << 'EXTITEMXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="horizontal"
+              android:gravity="center_vertical"
+              android:paddingStart="16dp"
+              android:paddingEnd="8dp"
+              android:paddingTop="12dp"
+              android:paddingBottom="12dp">
+
+              <LinearLayout
+                  android:layout_width="0dp"
+                  android:layout_height="wrap_content"
+                  android:layout_weight="1"
+                  android:orientation="vertical">
+
+                  <TextView
+                      android:id="@+id/ext_name"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:textColor="#E8EAED"
+                      android:textSize="14sp"
+                      android:textStyle="bold"/>
+
+                  <TextView
+                      android:id="@+id/ext_id"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:textColor="#9AA0A6"
+                      android:textSize="11sp"
+                      android:ellipsize="end"
+                      android:maxLines="1"/>
+
+              </LinearLayout>
+
+              <Switch
+                  android:id="@+id/ext_toggle"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginEnd="8dp"
+                  android:thumbTint="#1A73E8"
+                  android:trackTint="#3C4043"/>
+
+              <ImageButton
+                  android:id="@+id/ext_remove"
+                  android:layout_width="36dp"
+                  android:layout_height="36dp"
+                  android:background="?attr/selectableItemBackgroundBorderless"
+                  android:src="@drawable/ic_close"
+                  android:padding="6dp"
+                  android:contentDescription="Uninstall"/>
+
+          </LinearLayout>
+          EXTITEMXML
+
           # activity_extension_manager.xml - Material dark style
           cat > app/src/main/res/layout/activity_extension_manager.xml << 'EXTXML'
           <?xml version="1.0" encoding="utf-8"?>
@@ -1346,13 +1610,14 @@ jobs:
                   android:paddingStart="16dp"
                   android:paddingBottom="8dp"/>
 
-              <ListView
+              <androidx.recyclerview.widget.RecyclerView
                   android:id="@+id/extension_list"
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
                   android:layout_weight="1"
-                  android:paddingStart="8dp"
-                  android:paddingEnd="8dp"/>
+                  android:paddingStart="4dp"
+                  android:paddingEnd="4dp"
+                  android:clipToPadding="false"/>
 
           </LinearLayout>
           EXTXML
