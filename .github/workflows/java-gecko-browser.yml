@@ -327,8 +327,7 @@ jobs:
                               public GeckoResult<WebExtension.PermissionPromptResponse> onInstallPromptRequest(
                                       @NonNull WebExtension extension,
                                       @NonNull String[] permissions,
-                                      @NonNull String[] origins,
-                                      @NonNull String[] dataCollectionPermissions) {
+                                      @NonNull String[] origins) {
                                   return GeckoResult.fromValue(
                                       new WebExtension.PermissionPromptResponse(true, true, false));
                               }
