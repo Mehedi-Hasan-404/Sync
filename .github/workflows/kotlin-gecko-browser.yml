@@ -270,6 +270,9 @@ jobs:
           import org.mozilla.geckoview.GeckoSession.ProgressDelegate
           import org.mozilla.geckoview.GeckoSession.NavigationDelegate
           import org.mozilla.geckoview.GeckoSession.ContentDelegate
+          import org.mozilla.geckoview.WebExtension.MessageDelegate
+          import org.mozilla.geckoview.WebExtension.ActionDelegate
+          import org.mozilla.geckoview.WebExtension.Action
           class MainActivity : BaseActivity() {
               companion object {
                   var appRuntime: GeckoRuntime? = null
@@ -302,20 +305,58 @@ jobs:
                           .extensionsProcessEnabled(true)
                           .build()
                       appRuntime = GeckoRuntime.create(this, settings)
+
+                      // Auto-approve installs and updates
                       appRuntime!!.webExtensionController.promptDelegate =
                           object : WebExtensionController.PromptDelegate {
-                              override fun onInstallPrompt(extension: WebExtension): GeckoResult<AllowOrDeny> {
-                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW)
-                              }
+                              override fun onInstallPrompt(extension: WebExtension): GeckoResult<AllowOrDeny> =
+                                  GeckoResult.fromValue(AllowOrDeny.ALLOW)
                               override fun onUpdatePrompt(
                                   current: WebExtension, updated: WebExtension,
                                   newPermissions: Array<out String>, newOrigins: Array<out String>
+                              ): GeckoResult<AllowOrDeny> = GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                          }
+
+                      // TabDelegate — lets extensions open/close/update tabs
+                      appRuntime!!.webExtensionController.tabDelegate =
+                          object : WebExtensionController.TabDelegate {
+                              override fun onNewTab(
+                                  source: WebExtension?, details: WebExtension.CreateTabDetails
+                              ): GeckoResult<GeckoSession> {
+                                  val newSession = GeckoSession()
+                                  runOnUiThread { addExtensionTab(newSession, details.url ?: "about:blank") }
+                                  return GeckoResult.fromValue(newSession)
+                              }
+                              override fun onCloseTab(
+                                  source: WebExtension?, session: GeckoSession
                               ): GeckoResult<AllowOrDeny> {
+                                  runOnUiThread {
+                                      val idx = tabs.indexOfFirst { it.session === session }
+                                      if (idx >= 0) closeTab(idx)
+                                  }
+                                  return GeckoResult.fromValue(AllowOrDeny.ALLOW)
+                              }
+                              override fun onUpdateTab(
+                                  source: WebExtension?, session: GeckoSession,
+                                  details: WebExtension.UpdateTabDetails
+                              ): GeckoResult<AllowOrDeny> {
+                                  runOnUiThread {
+                                      val idx = tabs.indexOfFirst { it.session === session }
+                                      if (idx >= 0 && details.url != null) {
+                                          tabs[idx].session.loadUri(details.url!!)
+                                          if (details.active == true) switchToTab(idx)
+                                      }
+                                  }
                                   return GeckoResult.fromValue(AllowOrDeny.ALLOW)
                               }
                           }
                   }
                   runtime = appRuntime!!
+
+                  // Restore previously installed extensions on startup
+                  runtime.webExtensionController.list().accept { extensions ->
+                      extensions?.forEach { ext -> enableExtensionOnAllSessions(ext) }
+                  }
 
                   // Install native crash handler and log ABI/device info
                   val crashLog = "${filesDir.absolutePath}/crash.log"
@@ -420,8 +461,77 @@ jobs:
                   tabCountText.text = tabs.size.coerceAtMost(99).toString()
               }
 
-              private fun openNewTab(url: String) {
-                  val session = GeckoSession()
+              // Called by TabDelegate when an extension opens a new tab
+              private fun addExtensionTab(session: GeckoSession, url: String) {
+                  setupSessionDelegates(session)
+                  session.open(runtime)
+                  val tab = BrowserTab(session, url)
+                  tabs.add(tab)
+                  tabAdapter.notifyItemInserted(tabs.size - 1)
+                  switchToTab(tabs.size - 1)
+                  updateTabCount()
+                  session.loadUri(url)
+              }
+
+              // Wire ActionDelegate + MessageDelegate to a session for all installed extensions
+              private fun enableExtensionOnAllSessions(ext: WebExtension) {
+                  tabs.forEach { tab -> wireExtensionToSession(ext, tab.session) }
+              }
+
+              private fun wireExtensionToSession(ext: WebExtension, session: GeckoSession) {
+                  // ActionDelegate — handles browser action badge/icon/popup for this session
+                  ext.setActionDelegate(session, object : ActionDelegate {
+                      override fun onBrowserAction(extension: WebExtension, s: GeckoSession?, action: Action) {
+                          runOnUiThread { updateExtensionBadge(extension.id, action) }
+                      }
+                      override fun onTogglePopup(extension: WebExtension, action: Action): GeckoResult<GeckoSession>? {
+                          // Open extension popup in a floating WebView dialog
+                          val popupSession = GeckoSession()
+                          runOnUiThread { showExtensionPopup(extension, popupSession, action.title ?: extension.metaData?.name ?: "Extension") }
+                          return GeckoResult.fromValue(popupSession)
+                      }
+                  })
+
+                  // MessageDelegate — background <-> content script messaging
+                  ext.setMessageDelegate(session, object : MessageDelegate {
+                      override fun onMessage(nativeApp: String, message: Any, sender: WebExtension.MessageSender): GeckoResult<Any>? {
+                          return null // pass-through; extensions handle their own messaging
+                      }
+                      override fun onConnect(port: WebExtension.Port) {
+                          // Long-lived port — store if needed for later messaging
+                      }
+                  }, "browser")
+              }
+
+              private fun updateExtensionBadge(extId: String, action: Action) {
+                  // Future: show per-extension badge overlay on the menu button
+                  val badge = action.badgeText
+                  if (!badge.isNullOrEmpty()) {
+                      android.util.Log.d("ExtBadge", "Extension $extId badge: $badge")
+                  }
+              }
+
+              private fun showExtensionPopup(ext: WebExtension, popupSession: GeckoSession, title: String) {
+                  val dialog = androidx.appcompat.app.AlertDialog.Builder(this)
+                      .setTitle(title)
+                      .setOnDismissListener { popupSession.close() }
+                      .create()
+
+                  val popupView = org.mozilla.geckoview.GeckoView(this)
+                  popupSession.open(runtime)
+                  popupView.setSession(popupSession)
+
+                  dialog.setView(popupView)
+                  dialog.show()
+
+                  // Size the popup reasonably
+                  dialog.window?.setLayout(
+                      (resources.displayMetrics.widthPixels * 0.9).toInt(),
+                      (resources.displayMetrics.heightPixels * 0.7).toInt()
+                  )
+              }
+
+              private fun setupSessionDelegates(session: GeckoSession) {
                   session.settings.userAgentOverride = GECKO_UA
                   session.settings.allowJavascript = true
                   session.settings.useTrackingProtection = false
@@ -485,7 +595,18 @@ jobs:
                       }
                   }
 
+              }
+
+              private fun openNewTab(url: String) {
+                  val session = GeckoSession()
+                  setupSessionDelegates(session)
                   session.open(runtime)
+
+                  // Wire all already-installed extensions to this new session
+                  runtime.webExtensionController.list().accept { extensions ->
+                      extensions?.forEach { ext -> wireExtensionToSession(ext, session) }
+                  }
+
                   val isHome = url == "about:home"
                   val tab = BrowserTab(session, if (isHome) "" else url)
                   tabs.add(tab)
@@ -662,9 +783,11 @@ jobs:
           import android.net.Uri
           import android.os.Bundle
           import android.provider.OpenableColumns
+          import android.view.*
           import android.widget.*
-          import androidx.appcompat.app.AppCompatActivity
-          import org.mozilla.geckoview.GeckoRuntime
+          import androidx.appcompat.app.AlertDialog
+          import androidx.recyclerview.widget.LinearLayoutManager
+          import androidx.recyclerview.widget.RecyclerView
           import org.mozilla.geckoview.WebExtension
           import java.io.File
           import java.io.FileOutputStream
@@ -676,9 +799,9 @@ jobs:
                   const val PICK_EXTENSION = 1001
               }
 
-              private lateinit var extensionList: android.widget.ListView
-              private val installedExtensions = mutableListOf<String>()
-              private lateinit var extAdapter: ArrayAdapter<String>
+              // Holds live WebExtension objects — not just names
+              private val installedExtensions = mutableListOf<WebExtension>()
+              private lateinit var extAdapter: ExtensionAdapter
 
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
@@ -686,134 +809,184 @@ jobs:
 
                   findViewById<ImageButton>(R.id.btn_back_ext).setOnClickListener { finish() }
 
-                  extensionList = findViewById(R.id.extension_list)
-                  extAdapter = ArrayAdapter(this, android.R.layout.simple_list_item_1, installedExtensions)
-                  extensionList.adapter = extAdapter
+                  val recycler = findViewById<RecyclerView>(R.id.extension_list)
+                  extAdapter = ExtensionAdapter(installedExtensions,
+                      onToggle = { ext, enabled -> toggleExtension(ext, enabled) },
+                      onUninstall = { ext -> uninstallExtension(ext) }
+                  )
+                  recycler.layoutManager = LinearLayoutManager(this)
+                  recycler.adapter = extAdapter
 
+                  // Load from GeckoView — the source of truth
                   loadInstalledExtensions()
 
                   findViewById<Button>(R.id.btn_install_from_file).setOnClickListener {
                       val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                           type = "*/*"
                           putExtra(Intent.EXTRA_MIME_TYPES, arrayOf(
-                              "application/zip",
-                              "application/x-zip-compressed",
-                              "application/octet-stream",
-                              "application/x-xpinstall"
+                              "application/zip", "application/x-zip-compressed",
+                              "application/octet-stream", "application/x-xpinstall"
                           ))
                       }
                       startActivityForResult(intent, PICK_EXTENSION)
                   }
 
-                  findViewById<Button>(R.id.btn_install_from_url).setOnClickListener {
-                      showUrlInstallDialog()
-                  }
+                  findViewById<Button>(R.id.btn_install_from_url).setOnClickListener { showUrlInstallDialog() }
               }
 
               private fun loadInstalledExtensions() {
-                  val extDir = File(filesDir, "extensions")
-                  if (extDir.exists()) {
-                      extDir.listFiles()?.forEach {
-                          installedExtensions.add(it.name)
-                      }
-                      extAdapter.notifyDataSetChanged()
-                  }
-              }
-
-              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-                  super.onActivityResult(requestCode, resultCode, data)
-                  if (requestCode == PICK_EXTENSION && resultCode == Activity.RESULT_OK) {
-                      data?.data?.let { uri -> installExtensionFromUri(uri) }
-                  }
-              }
-
-              private fun installExtensionFromUri(uri: Uri) {
-                  val runtime = MainActivity.appRuntime ?: run {
-                      runOnUiThread { Toast.makeText(this, "Browser not initialised", Toast.LENGTH_SHORT).show() }
-                      return
-                  }
-                  Thread {
-                  try {
-                      val fileName = getFileName(uri) ?: "extension_${System.currentTimeMillis()}"
-                      val extDir = File(filesDir, "extensions/${fileName.removeSuffix(".zip").removeSuffix(".xpi")}")
-                      extDir.mkdirs()
-
-                      contentResolver.openInputStream(uri)?.use { input ->
-                          ZipInputStream(input).use { zip ->
-                              var entry = zip.nextEntry
-                              while (entry != null) {
-                                  val file = File(extDir, entry.name)
-                                  if (entry.isDirectory) {
-                                      file.mkdirs()
-                                  } else {
-                                      file.parentFile?.mkdirs()
-                                      FileOutputStream(file).use { out ->
-                                          zip.copyTo(out)
-                                      }
-                                  }
-                                  entry = zip.nextEntry
-                              }
-                          }
-                      }
-
-                      runtime.webExtensionController.install("file://${extDir.absolutePath}/")
-                          .accept({ ext: WebExtension? ->
-                              runOnUiThread {
-                                  installedExtensions.add(ext?.id ?: extDir.name)
-                                  extAdapter.notifyDataSetChanged()
-                                  Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
-                              }
-                          }, { throwable: Throwable? ->
-                              runOnUiThread {
-                                  Toast.makeText(this, "Install failed: ${throwable?.message}", Toast.LENGTH_LONG).show()
-                              }
-                          })
-                  } catch (e: Exception) {
+                  val rt = MainActivity.appRuntime ?: return
+                  rt.webExtensionController.list().accept { extensions ->
                       runOnUiThread {
-                          Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show()
+                          installedExtensions.clear()
+                          extensions?.let { installedExtensions.addAll(it) }
+                          extAdapter.notifyDataSetChanged()
                       }
                   }
-                  }.start()
               }
 
-              private fun showUrlInstallDialog() {
-                  val input = EditText(this)
-                  input.hint = "https://addons.mozilla.org/..."
-                  androidx.appcompat.app.AlertDialog.Builder(this)
-                      .setTitle("Install Extension from URL")
-                      .setView(input)
-                      .setPositiveButton("Install") { _, _ ->
-                          val url = input.text.toString()
-                          if (url.isNotEmpty()) {
-                              val rt = MainActivity.appRuntime ?: run {
-                                  Toast.makeText(this@ExtensionManagerActivity, "Browser not initialised", Toast.LENGTH_SHORT).show()
-                                  return@setPositiveButton
-                              }
-                              rt.webExtensionController.install(url)
-                                  .accept({ ext: WebExtension? ->
-                                      runOnUiThread {
-                                          installedExtensions.add(ext?.id ?: url)
-                                          extAdapter.notifyDataSetChanged()
-                                          Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
-                                      }
-                                  }, { throwable: Throwable? ->
-                                      runOnUiThread {
-                                          Toast.makeText(this, "Failed: ${throwable?.message}", Toast.LENGTH_LONG).show()
-                                      }
-                                  })
+              private fun toggleExtension(ext: WebExtension, enable: Boolean) {
+                  val rt = MainActivity.appRuntime ?: return
+                  val op = if (enable)
+                      rt.webExtensionController.enable(ext, WebExtension.Flags.NONE)
+                  else
+                      rt.webExtensionController.disable(ext, WebExtension.Flags.NONE)
+                  op.accept({ updated ->
+                      runOnUiThread {
+                          val idx = installedExtensions.indexOfFirst { it.id == ext.id }
+                          if (idx >= 0 && updated != null) {
+                              installedExtensions[idx] = updated
+                              extAdapter.notifyItemChanged(idx)
                           }
+                          Toast.makeText(this, if (enable) "Enabled" else "Disabled", Toast.LENGTH_SHORT).show()
+                      }
+                  }, { err ->
+                      runOnUiThread { Toast.makeText(this, "Failed: ${err?.message}", Toast.LENGTH_SHORT).show() }
+                  })
+              }
+
+              private fun uninstallExtension(ext: WebExtension) {
+                  val rt = MainActivity.appRuntime ?: return
+                  AlertDialog.Builder(this)
+                      .setTitle("Uninstall")
+                      .setMessage("Remove "${ext.metaData?.name ?: ext.id}"?")
+                      .setPositiveButton("Remove") { _, _ ->
+                          rt.webExtensionController.uninstall(ext).accept({
+                              runOnUiThread {
+                                  val idx = installedExtensions.indexOfFirst { it.id == ext.id }
+                                  if (idx >= 0) {
+                                      installedExtensions.removeAt(idx)
+                                      extAdapter.notifyItemRemoved(idx)
+                                  }
+                                  // Clean up extracted files if any
+                                  File(filesDir, "extensions/${ext.id}").deleteRecursively()
+                                  Toast.makeText(this, "Uninstalled", Toast.LENGTH_SHORT).show()
+                              }
+                          }, { err ->
+                              runOnUiThread { Toast.makeText(this, "Failed: ${err?.message}", Toast.LENGTH_SHORT).show() }
+                          })
                       }
                       .setNegativeButton("Cancel", null)
                       .show()
               }
 
-              private fun getFileName(uri: Uri): String? {
-                  contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-                      val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                      cursor.moveToFirst()
-                      return cursor.getString(nameIndex)
+              override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+                  super.onActivityResult(requestCode, resultCode, data)
+                  if (requestCode == PICK_EXTENSION && resultCode == Activity.RESULT_OK)
+                      data?.data?.let { installExtensionFromUri(it) }
+              }
+
+              private fun installExtensionFromUri(uri: Uri) {
+                  val rt = MainActivity.appRuntime ?: return
+                  Thread {
+                      try {
+                          val fileName = getFileName(uri) ?: "ext_${System.currentTimeMillis()}"
+                          val extName = fileName.removeSuffix(".zip").removeSuffix(".xpi")
+                          val extDir = File(filesDir, "extensions/$extName").also { it.mkdirs() }
+
+                          contentResolver.openInputStream(uri)?.use { input ->
+                              ZipInputStream(input).use { zip ->
+                                  var entry = zip.nextEntry
+                                  while (entry != null) {
+                                      val f = File(extDir, entry.name)
+                                      if (entry.isDirectory) f.mkdirs()
+                                      else { f.parentFile?.mkdirs(); FileOutputStream(f).use { zip.copyTo(it) } }
+                                      entry = zip.nextEntry
+                                  }
+                              }
+                          }
+
+                          rt.webExtensionController.install("file://${extDir.absolutePath}/")
+                              .accept({ ext ->
+                                  runOnUiThread {
+                                      if (ext != null) { installedExtensions.add(ext); extAdapter.notifyItemInserted(installedExtensions.size - 1) }
+                                      Toast.makeText(this, "Extension installed!", Toast.LENGTH_SHORT).show()
+                                  }
+                              }, { err ->
+                                  runOnUiThread { Toast.makeText(this, "Install failed: ${err?.message}", Toast.LENGTH_LONG).show() }
+                              })
+                      } catch (e: Exception) {
+                          runOnUiThread { Toast.makeText(this, "Error: ${e.message}", Toast.LENGTH_LONG).show() }
+                      }
+                  }.start()
+              }
+
+              private fun showUrlInstallDialog() {
+                  val input = EditText(this).apply { hint = "https://addons.mozilla.org/..." }
+                  AlertDialog.Builder(this)
+                      .setTitle("Install from URL")
+                      .setView(input)
+                      .setPositiveButton("Install") { _, _ ->
+                          val url = input.text.toString().trim()
+                          if (url.isEmpty()) return@setPositiveButton
+                          val rt = MainActivity.appRuntime ?: return@setPositiveButton
+                          rt.webExtensionController.install(url)
+                              .accept({ ext ->
+                                  runOnUiThread {
+                                      if (ext != null) { installedExtensions.add(ext); extAdapter.notifyItemInserted(installedExtensions.size - 1) }
+                                      Toast.makeText(this, "Installed!", Toast.LENGTH_SHORT).show()
+                                  }
+                              }, { err ->
+                                  runOnUiThread { Toast.makeText(this, "Failed: ${err?.message}", Toast.LENGTH_LONG).show() }
+                              })
+                      }
+                      .setNegativeButton("Cancel", null).show()
+              }
+
+              private fun getFileName(uri: Uri): String? =
+                  contentResolver.query(uri, null, null, null, null)?.use { c ->
+                      val i = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                      if (c.moveToFirst() && i >= 0) c.getString(i) else null
                   }
-                  return null
+
+              // ── RecyclerView adapter for extensions ────────────────────────
+              inner class ExtensionAdapter(
+                  private val items: List<WebExtension>,
+                  private val onToggle: (WebExtension, Boolean) -> Unit,
+                  private val onUninstall: (WebExtension) -> Unit
+              ) : RecyclerView.Adapter<ExtensionAdapter.VH>() {
+
+                  inner class VH(v: View) : RecyclerView.ViewHolder(v) {
+                      val name: TextView = v.findViewById(R.id.ext_name)
+                      val id: TextView = v.findViewById(R.id.ext_id)
+                      val toggle: android.widget.Switch = v.findViewById(R.id.ext_toggle)
+                      val btnRemove: ImageButton = v.findViewById(R.id.ext_remove)
+                  }
+
+                  override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) =
+                      VH(LayoutInflater.from(parent.context).inflate(R.layout.item_extension, parent, false))
+
+                  override fun getItemCount() = items.size
+
+                  override fun onBindViewHolder(holder: VH, position: Int) {
+                      val ext = items[position]
+                      holder.name.text = ext.metaData?.name ?: ext.id
+                      holder.id.text = ext.id
+                      holder.toggle.setOnCheckedChangeListener(null)
+                      holder.toggle.isChecked = ext.metaData?.enabled ?: true
+                      holder.toggle.setOnCheckedChangeListener { _, checked -> onToggle(ext, checked) }
+                      holder.btnRemove.setOnClickListener { onUninstall(ext) }
+                  }
               }
           }
           EXTKT
@@ -1172,6 +1345,64 @@ jobs:
           </LinearLayout>
           TABXML
 
+          # item_extension.xml — single row in extension manager list
+          cat > app/src/main/res/layout/item_extension.xml << 'EXTITEMXML'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="horizontal"
+              android:gravity="center_vertical"
+              android:paddingStart="16dp"
+              android:paddingEnd="8dp"
+              android:paddingTop="12dp"
+              android:paddingBottom="12dp">
+
+              <LinearLayout
+                  android:layout_width="0dp"
+                  android:layout_height="wrap_content"
+                  android:layout_weight="1"
+                  android:orientation="vertical">
+
+                  <TextView
+                      android:id="@+id/ext_name"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:textColor="#E8EAED"
+                      android:textSize="14sp"
+                      android:textStyle="bold"/>
+
+                  <TextView
+                      android:id="@+id/ext_id"
+                      android:layout_width="wrap_content"
+                      android:layout_height="wrap_content"
+                      android:textColor="#9AA0A6"
+                      android:textSize="11sp"
+                      android:ellipsize="end"
+                      android:maxLines="1"/>
+
+              </LinearLayout>
+
+              <Switch
+                  android:id="@+id/ext_toggle"
+                  android:layout_width="wrap_content"
+                  android:layout_height="wrap_content"
+                  android:layout_marginEnd="8dp"
+                  android:thumbTint="#1A73E8"
+                  android:trackTint="#3C4043"/>
+
+              <ImageButton
+                  android:id="@+id/ext_remove"
+                  android:layout_width="36dp"
+                  android:layout_height="36dp"
+                  android:background="?attr/selectableItemBackgroundBorderless"
+                  android:src="@drawable/ic_close"
+                  android:padding="6dp"
+                  android:contentDescription="Uninstall"/>
+
+          </LinearLayout>
+          EXTITEMXML
+
           # activity_extension_manager.xml - Material dark style
           cat > app/src/main/res/layout/activity_extension_manager.xml << 'EXTXML'
           <?xml version="1.0" encoding="utf-8"?>
@@ -1256,13 +1487,14 @@ jobs:
                   android:paddingStart="16dp"
                   android:paddingBottom="8dp"/>
 
-              <ListView
+              <androidx.recyclerview.widget.RecyclerView
                   android:id="@+id/extension_list"
                   android:layout_width="match_parent"
                   android:layout_height="0dp"
                   android:layout_weight="1"
-                  android:paddingStart="8dp"
-                  android:paddingEnd="8dp"/>
+                  android:paddingStart="4dp"
+                  android:paddingEnd="4dp"
+                  android:clipToPadding="false"/>
 
           </LinearLayout>
           EXTXML
