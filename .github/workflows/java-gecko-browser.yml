@@ -50,7 +50,7 @@ jobs:
           task clean(type: Delete) {
               delete rootProject.buildDir
           }
-          GRADLE
+GRADLE
 
           # settings.gradle
           cat > settings.gradle << 'SETTINGS'
@@ -71,14 +71,14 @@ jobs:
           }
           rootProject.name = "JavaGeckoBrowser"
           include ':app'
-          SETTINGS
+SETTINGS
 
           # gradle.properties
           cat > gradle.properties << 'PROPS'
           android.useAndroidX=true
           android.enableJetifier=false
           org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m
-          PROPS
+PROPS
 
           mkdir -p app/src/main/java/com/personal/javageckobrowser
           mkdir -p app/src/main/res/layout
@@ -166,7 +166,7 @@ jobs:
               implementation 'androidx.recyclerview:recyclerview:1.3.2'
               implementation 'androidx.documentfile:documentfile:1.0.1'
           }
-          APPGRADLE
+APPGRADLE
 
           # AndroidManifest.xml
           cat > app/src/main/AndroidManifest.xml << 'MANIFEST'
@@ -209,7 +209,7 @@ jobs:
 
               </application>
           </manifest>
-          MANIFEST
+MANIFEST
 
           # BaseActivity.java — handles edge-to-edge window decor for all activities
           cat > app/src/main/java/com/personal/javageckobrowser/BaseActivity.java << 'BASEJAVA'
@@ -248,7 +248,7 @@ jobs:
                   root.requestApplyInsets();
               }
           }
-          BASEJAVA
+BASEJAVA
 
           # MainActivity.java
           cat > app/src/main/java/com/personal/javageckobrowser/MainActivity.java << 'MAINJAVA'
@@ -1057,7 +1057,7 @@ jobs:
                   }
               }
           }
-          MAINJAVA
+MAINJAVA
 
 
           # BrowserTab.java
@@ -1082,7 +1082,7 @@ jobs:
               public String getTitle() { return title; }
               public void setTitle(String title) { this.title = title; }
           }
-          TABJAVA
+TABJAVA
 
           # AppRuntime.java — singleton to share GeckoRuntime across activities
           cat > app/src/main/java/com/personal/javageckobrowser/AppRuntime.java << 'APPRUNTIME'
@@ -1093,7 +1093,7 @@ jobs:
           public class AppRuntime {
               public static GeckoRuntime runtime;
           }
-          APPRUNTIME
+APPRUNTIME
 
           # TabAdapter.java
           cat > app/src/main/java/com/personal/javageckobrowser/TabAdapter.java << 'TABADAPTERJAVA'
@@ -1172,7 +1172,7 @@ jobs:
                   }
               }
           }
-          TABADAPTERJAVA
+TABADAPTERJAVA
 
           # ExtensionManagerActivity.java
           cat > app/src/main/java/com/personal/javageckobrowser/ExtensionManagerActivity.java << 'EXTJAVA'
@@ -1427,7 +1427,7 @@ jobs:
                   }
               }
           }
-          EXTJAVA
+EXTJAVA
 
           # Vector drawables - Chrome-style icons (same as Kotlin)
           cat > app/src/main/res/drawable/ic_arrow_back.xml << 'DRAWBACK'
@@ -1437,7 +1437,7 @@ jobs:
               <path android:fillColor="#FFFFFF"
                   android:pathData="M20,11H7.83l5.59,-5.59L12,4l-8,8 8,8 1.41,-1.41L7.83,13H20v-2z"/>
           </vector>
-          DRAWBACK
+DRAWBACK
 
           cat > app/src/main/res/drawable/ic_arrow_forward.xml << 'DRAWFWD'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1446,7 +1446,7 @@ jobs:
               <path android:fillColor="#FFFFFF"
                   android:pathData="M12,4l-1.41,1.41L16.17,11H4v2h12.17l-5.58,5.59L12,20l8,-8z"/>
           </vector>
-          DRAWFWD
+DRAWFWD
 
           cat > app/src/main/res/drawable/ic_refresh.xml << 'DRAWREF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1455,7 +1455,7 @@ jobs:
               <path android:fillColor="#FFFFFF"
                   android:pathData="M17.65,6.35C16.2,4.9 14.21,4 12,4c-4.42,0 -7.99,3.58 -7.99,8s3.57,8 7.99,8c3.73,0 6.84,-2.55 7.73,-6h-2.08c-0.82,2.33 -3.04,4 -5.65,4 -3.31,0 -6,-2.69 -6,-6s2.69,-6 6,-6c1.66,0 3.14,0.69 4.22,1.78L13,11h7V4l-2.35,2.35z"/>
           </vector>
-          DRAWREF
+DRAWREF
 
           cat > app/src/main/res/drawable/ic_more_vert.xml << 'DRAWMORE'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1464,7 +1464,7 @@ jobs:
               <path android:fillColor="#FFFFFF"
                   android:pathData="M12,8c1.1,0 2,-0.9 2,-2s-0.9,-2 -2,-2 -2,0.9 -2,2 0.9,2 2,2zM12,10c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2zM12,16c-1.1,0 -2,0.9 -2,2s0.9,2 2,2 2,-0.9 2,-2 -0.9,-2 -2,-2z"/>
           </vector>
-          DRAWMORE
+DRAWMORE
 
           cat > app/src/main/res/drawable/ic_tab_count.xml << 'DRAWTAB'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1475,7 +1475,7 @@ jobs:
               <path android:fillColor="#00000000" android:strokeColor="#FFFFFF" android:strokeWidth="2"
                   android:pathData="M6,4h14v14"/>
           </vector>
-          DRAWTAB
+DRAWTAB
 
           cat > app/src/main/res/drawable/ic_extensions.xml << 'DRAWEXT'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1484,7 +1484,7 @@ jobs:
               <path android:fillColor="#FFFFFF"
                   android:pathData="M20.5,11H19V7c0,-1.1 -0.9,-2 -2,-2h-4V3.5C13,2.12 11.88,1 10.5,1S8,2.12 8,3.5V5H4C2.9,5 2,5.9 2,7v3.8h1.5c1.49,0 2.7,1.21 2.7,2.7s-1.21,2.7 -2.7,2.7H2V20c0,1.1 0.9,2 2,2h3.8v-1.5c0,-1.49 1.21,-2.7 2.7,-2.7 1.49,0 2.7,1.21 2.7,2.7V22H17c1.1,0 2,-0.9 2,-2v-4h1.5c1.38,0 2.5,-1.12 2.5,-2.5S21.88,11 20.5,11z"/>
           </vector>
-          DRAWEXT
+DRAWEXT
 
           cat > app/src/main/res/drawable/ic_lock.xml << 'DRAWLOCK'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1493,7 +1493,7 @@ jobs:
               <path android:fillColor="#8AB4F8"
                   android:pathData="M18,8h-1V6c0,-2.76 -2.24,-5 -5,-5S7,3.24 7,6v2H6c-1.1,0 -2,0.9 -2,2v10c0,1.1 0.9,2 2,2h12c1.1,0 2,-0.9 2,-2V10c0,-1.1 -0.9,-2 -2,-2zM12,17c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2 -0.9,2 -2,2zM15.1,8H8.9V6c0,-1.71 1.39,-3.1 3.1,-3.1 1.71,0 3.1,1.39 3.1,3.1v2z"/>
           </vector>
-          DRAWLOCK
+DRAWLOCK
 
           cat > app/src/main/res/drawable/popup_bg.xml << 'POPUPBG'
           <?xml version="1.0" encoding="utf-8"?>
@@ -1502,7 +1502,7 @@ jobs:
               <corners android:radius="8dp"/>
               <solid android:color="#292A2D"/>
           </shape>
-          POPUPBG
+POPUPBG
 
           # activity_main.xml — Chrome bottom-bar layout with find-in-page bar
           cat > app/src/main/res/layout/activity_main.xml << 'MAINXML'
@@ -1741,7 +1741,7 @@ jobs:
               </LinearLayout>
 
           </androidx.coordinatorlayout.widget.CoordinatorLayout>
-          MAINXML
+MAINXML
 
           # item_tab.xml — Chrome compact tab strip chip
           cat > app/src/main/res/layout/item_tab.xml << 'TABXML'
@@ -1785,7 +1785,7 @@ jobs:
                   android:contentDescription="Close tab"/>
 
           </LinearLayout>
-          TABXML
+TABXML
 
           cat > app/src/main/res/drawable/favicon_dot.xml << 'DRAWFAV'
           <?xml version="1.0" encoding="utf-8"?>
@@ -1793,7 +1793,7 @@ jobs:
               android:shape="oval">
               <solid android:color="#5F6368"/>
           </shape>
-          DRAWFAV
+DRAWFAV
 
           cat > app/src/main/res/drawable/ic_close.xml << 'DRAWCLOSE'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -1802,7 +1802,7 @@ jobs:
               <path android:fillColor="#9AA0A6"
                   android:pathData="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z"/>
           </vector>
-          DRAWCLOSE
+DRAWCLOSE
 
           cat > app/src/main/res/drawable/url_bar_bg.xml << 'URLBARBG2'
           <?xml version="1.0" encoding="utf-8"?>
@@ -1811,7 +1811,7 @@ jobs:
               <corners android:radius="20dp"/>
               <solid android:color="#3C4043"/>
           </shape>
-          URLBARBG2
+URLBARBG2
 
           cat > app/src/main/res/drawable/tab_item_bg.xml << 'TABITEMBG2'
           <?xml version="1.0" encoding="utf-8"?>
@@ -1820,7 +1820,7 @@ jobs:
               <corners android:topLeftRadius="8dp" android:topRightRadius="8dp"/>
               <solid android:color="#35363A"/>
           </shape>
-          TABITEMBG2
+TABITEMBG2
 
           # item_extension.xml — single row in extension list
           cat > app/src/main/res/layout/item_extension.xml << 'EXTITEMXML'
@@ -1878,7 +1878,7 @@ jobs:
                   android:contentDescription="Uninstall"/>
 
           </LinearLayout>
-          EXTITEMXML
+EXTITEMXML
 
           # activity_extension_manager.xml - Material dark style
           cat > app/src/main/res/layout/activity_extension_manager.xml << 'EXTXML'
@@ -1972,7 +1972,7 @@ jobs:
                   android:clipToPadding="false"/>
 
           </LinearLayout>
-          EXTXML
+EXTXML
 
           # browser_menu.xml
           cat > app/src/main/res/menu/browser_menu.xml << 'MENUXML'
@@ -1989,7 +1989,7 @@ jobs:
               <item android:id="@+id/menu_extensions"    android:title="Extensions"/>
               <item android:id="@+id/menu_settings"      android:title="Settings"/>
           </menu>
-          MENUXML
+MENUXML
 
           # dimens.xml
           cat > app/src/main/res/values/dimens.xml << 'DIMENS'
@@ -1997,7 +1997,7 @@ jobs:
           <resources>
               <dimen name="toolbar_height">56dp</dimen>
           </resources>
-          DIMENS
+DIMENS
 
           # home_page.xml — Chrome-style new tab page
           cat > app/src/main/res/layout/home_page.xml << 'HOMEXML'
@@ -2091,7 +2091,7 @@ jobs:
 
               </LinearLayout>
           </ScrollView>
-          HOMEXML
+HOMEXML
 
           cat > app/src/main/res/layout/home_chip.xml << 'HOMECHIPXML'
           <?xml version="1.0" encoding="utf-8"?>
@@ -2133,7 +2133,7 @@ jobs:
                   android:maxLines="1"/>
 
           </LinearLayout>
-          HOMECHIPXML
+HOMECHIPXML
 
           cat > app/src/main/res/drawable/home_search_bg.xml << 'HOMESEARCHBG'
           <?xml version="1.0" encoding="utf-8"?>
@@ -2143,7 +2143,7 @@ jobs:
               <solid android:color="#303134"/>
               <stroke android:width="1dp" android:color="#5F6368"/>
           </shape>
-          HOMESEARCHBG
+HOMESEARCHBG
 
           cat > app/src/main/res/drawable/ic_search.xml << 'DRAWSEARCH'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -2152,7 +2152,8 @@ jobs:
               <path android:fillColor="#9AA0A6"
                   android:pathData="M15.5,14h-0.79l-0.28,-0.27C15.41,12.59 16,11.11 16,9.5 16,5.91 13.09,3 9.5,3S3,5.91 3,9.5 5.91,16 9.5,16c1.61,0 3.09,-0.59 4.23,-1.57l0.27,0.28v0.79l5,4.99L20.49,19l-4.99,-5zm-6,0C7.01,14 5,11.99 5,9.5S7.01,5 9.5,5 14,7.01 14,9.5 11.99,14 9.5,14z"/>
           </vector>
-          DRAWSEARCH
+DRAWSEARCH
+          cat > app/src/main/res/values/themes.xml << 'THEMES'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <style name="Theme.JavaGeckoBrowser" parent="Theme.MaterialComponents.DayNight.NoActionBar">
@@ -2170,14 +2171,14 @@ jobs:
                   <item name="android:popupBackground">@drawable/popup_bg</item>
               </style>
           </resources>
-          THEMES
+THEMES
 
           cat > app/src/main/res/values/strings.xml << 'STRINGS'
           <?xml version="1.0" encoding="utf-8"?>
           <resources>
               <string name="app_name">Personal Browser Java</string>
           </resources>
-          STRINGS
+STRINGS
 
 
           mkdir -p app/src/main/cpp
@@ -2202,7 +2203,7 @@ jobs:
           )
 
           target_compile_options(browsernative PRIVATE -std=c++17 -O2 -Wall)
-          CMAKELISTS
+CMAKELISTS
 
           # browser_native.cpp — JNI entry point, version info, UA helpers
           cat > app/src/main/cpp/browser_native.cpp << 'BROWSERNATIVE'
@@ -2260,7 +2261,7 @@ jobs:
           }
 
           } // extern "C"
-          BROWSERNATIVE
+BROWSERNATIVE
 
           # download_helper.cpp — native download chunk writer (faster than Java streams)
           cat > app/src/main/cpp/download_helper.cpp << 'DLHELPER'
@@ -2315,7 +2316,7 @@ jobs:
           }
 
           } // extern "C"
-          DLHELPER
+DLHELPER
 
           # crash_handler.cpp — installs SIGSEGV/SIGABRT handler, writes crash log to disk
           cat > app/src/main/cpp/crash_handler.cpp << 'CRASHHANDLER'
@@ -2368,7 +2369,7 @@ jobs:
           }
 
           } // extern "C"
-          CRASHHANDLER
+CRASHHANDLER
 
           # NativeBridge.java — JNI declarations + System.loadLibrary
           cat > app/src/main/java/com/personal/javageckobrowser/NativeBridge.java << 'NATIVEBRIDGE'
@@ -2408,13 +2409,13 @@ jobs:
                */
               public static native void installCrashHandler(String logPath);
           }
-          NATIVEBRIDGE
+NATIVEBRIDGE
 
           cat > app/proguard-rules.pro << 'PROGUARD'
           -keep class org.mozilla.geckoview.** { *; }
           -keep class com.personal.javageckobrowser.NativeBridge { *; }
           -keepclasseswithmembernames class * { native <methods>; }
-          PROGUARD
+PROGUARD
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
