@@ -315,7 +315,7 @@ jobs:
                                   origins: Array<out String>
                               ): GeckoResult<WebExtension.PermissionPromptResponse> =
                                   GeckoResult.fromValue(
-                                      WebExtension.PermissionPromptResponse(true, true, false))
+                                      WebExtension.PermissionPromptResponse(true, true))
                               override fun onUpdatePrompt(
                                   current: WebExtension,
                                   updated: WebExtension,
